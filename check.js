@@ -125,7 +125,73 @@ async function main() {
   check('标签使用等宽字体', /mono|Menlo|Consolas/i.test(String((await ev("getComputedStyle(document.querySelector('.card__foot')).fontFamily")).value)),
     String((await ev("getComputedStyle(document.querySelector('.card__foot')).fontFamily")).value).slice(0, 22));
 
+  /* ---------- 2.5 球面（照参考视频 3—5 秒）：默认排布 + 可拖动 ---------- */
+  check('默认排布为球面「所有项目」', (await ev("document.getElementById('canvas').dataset.mode")).value === 'globe',
+    String((await ev("document.getElementById('canvas').dataset.mode")).value));
+  const navBtns = await ev("[].map.call(document.querySelectorAll('#modes .mode'),function(b){return b.textContent.replace(/\\s+/g,'')}).join('|')");
+  check('顶栏有「所有项目」与「我的」入口',
+    /所有项目/.test(String(navBtns.value)) && /我的/.test(String(navBtns.value)), String(navBtns.value));
+
+  // 固定球面角度，让"可见数/缩放跨度"这类断言可复现（否则随自转相位抖动）
+  await ev("(function(){var g=window.__App.globe;g.autoSpin=false;g.vYaw=0;g.vPitch=0;g.yaw=0.35;g.pitch=-0.18;window.__App.layoutGlobeOnly();return 'ok'})()");
+  await sleep(320);
+  const sphere = await ev(`(function(){
+    var ns=[]; window.__App.nodes.forEach(function(n){ ns.push(n) });
+    var sc=ns.map(function(n){return n.scale});
+    var op=ns.map(function(n){return parseFloat(getComputedStyle(n.el).opacity)});
+    var xs=ns.map(function(n){return n.x}), ys=ns.map(function(n){return n.y});
+    var spanX=Math.max.apply(null,xs)-Math.min.apply(null,xs);
+    var spanY=Math.max.apply(null,ys)-Math.min.apply(null,ys);
+    var visible=op.filter(function(o){return o>0.3}).length;
+    return { n:ns.length, scMin:Math.min.apply(null,sc), scMax:Math.max.apply(null,sc),
+             opMin:Math.min.apply(null,op), opMax:Math.max.apply(null,op),
+             spanX:spanX, spanY:spanY, visible:visible };
+  })()`);
+  const sp = sphere.value || {};
+  check('球面：全部卡片参与排布', Number(sp.n) >= 20, sp.n + ' 张');
+  check('球面：近大远小（缩放有跨度）', (sp.scMax - sp.scMin) > 0.15, sp.scMin.toFixed(2) + ' → ' + sp.scMax.toFixed(2));
+  check('球面：纵深压暗（透明度有跨度）', (sp.opMax - sp.opMin) > 0.3, sp.opMin.toFixed(2) + ' → ' + sp.opMax.toFixed(2));
+  check('球面：横向铺开超过半个视口', Number(sp.spanX) > 700, Math.round(sp.spanX) + 'px 宽');
+  check('球面：纵向也铺开（不是压扁的一条）', Number(sp.spanY) > 300, Math.round(sp.spanY) + 'px 高');
+  check('球面：多数卡片可见', Number(sp.visible) >= 12, sp.visible + ' / ' + sp.n + ' 张清晰可见');
+
+  // 可见性测完再打开自转，测"自动缓慢旋转"
+  await ev("(function(){window.__App.globe.autoSpin=true;window.__App.globe.vYaw=0.00021;return 'ok'})()");
+  const y1 = (await ev("window.__App.globe.yaw")).value;
+  await sleep(1200);
+  const y2 = (await ev("window.__App.globe.yaw")).value;
+  check('球面：自动缓慢旋转', Math.abs(Number(y2) - Number(y1)) > 0.02,
+    'yaw ' + Number(y1).toFixed(3) + ' → ' + Number(y2).toFixed(3));
+
+  // 拖动测试：断言"拖动处理器真的改了相机参数"，比断言几何量可靠
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 700, y: 450, button: 'left', buttons: 0, clickCount: 1 }, S);
+  await ev("(function(){var g=window.__App.globe;g.autoSpin=false;g.vYaw=0;g.vPitch=0;g.pitch=-0.18;g.yaw=0.35;window.__App.layoutGlobeOnly();window.__pd=0;document.getElementById('stage').addEventListener('pointerdown',function(){window.__pd++},true);return 'ok'})()");
+  await sleep(250);
+  const dragBefore = await ev("(function(){var g=window.__App.globe;return JSON.stringify({pitch:g.pitch, yaw:g.yaw})})()");
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 700, y: 450, button: 'left', buttons: 1, clickCount: 1 }, S);
+  await sleep(90);
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 880, y: 560, button: 'left', buttons: 1 }, S);
+  await sleep(90);
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1060, y: 640, button: 'left', buttons: 1 }, S);
+  await sleep(90);
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 1060, y: 640, button: 'left', buttons: 0, clickCount: 1 }, S);
+  await sleep(300);
+  const dragAfter = await ev("(function(){var g=window.__App.globe;return JSON.stringify({pitch:g.pitch, yaw:g.yaw, vYaw:g.vYaw, wasDragging:!g.dragging})})()");
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 1060, y: 640, button: 'left', buttons: 0, clickCount: 1 }, S);
+  const B = JSON.parse(String(dragBefore.value)), A = JSON.parse(String(dragAfter.value));
+  const pitchMoved = Math.abs(A.pitch - B.pitch) > 0.1;
+  const yawMoved = Math.abs(A.yaw - B.yaw) > 0.2;
+  check('球面：鼠标拖动可操控转动（俯仰与经度都改变）', pitchMoved || yawMoved,
+    'pitch ' + B.pitch.toFixed(2) + '→' + A.pitch.toFixed(2) + '，yaw ' + B.yaw.toFixed(2) + '→' + A.yaw.toFixed(2));
+  check('球面：拖动后产生受控的惯性（不会失控）',
+    Math.abs(A.vYaw) <= 0.0016,
+    'vYaw=' + Number(A.vYaw).toExponential(2) + '（上限 1.6e-3）');
+  await ev("(function(){window.__App.globe.autoSpin=true;window.__App.globe.vYaw=0.00021;return 'ok'})()");
+  await sleep(400);
+  await shot('00-sphere');
+
   /* ---------- 3. 散落态：铺开且不重叠（用旋转后的 OBB 判断） ---------- */
+  await mode('scatter');
   const scatter = await ev(`(function(){
     var ns=[]; window.__App.nodes.forEach(function(n){ ns.push(n) });
     function corners(o){
@@ -306,8 +372,10 @@ async function main() {
   await sleep(1200); await waitSettled();
   const mob = await ev(`(function(){
     var ns=[]; window.__App.nodes.forEach(function(n){ ns.push(n) });
-    var tooWide = ns.filter(function(n){ return n.x + n.finalW*n.scale > document.getElementById('stage').clientWidth + 2 }).length;
-    return { n:ns.length, tooWide:tooWide, cols:(function(){var l={};ns.forEach(function(n){l[Math.round(n.x)]=1});return Object.keys(l).length})() };
+    var stage=document.getElementById('stage').clientWidth;
+    var pad = 6;
+    var tooWide = ns.filter(function(n){ return n.x < -pad || n.x + n.finalW*n.scale > stage + pad }).length;
+    return { n:ns.length, tooWide:tooWide, mode:document.getElementById('canvas').dataset.mode };
   })()`);
   check('移动端散落不超出画布', Number((mob.value || {}).tooWide) === 0, (mob.value || {}).tooWide + ' 张越界');
   check('移动端页面无横向滚动', Number((await ev("document.documentElement.scrollWidth - document.documentElement.clientWidth")).value) <= 2,

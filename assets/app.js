@@ -35,8 +35,19 @@
   let settled = false;
   let settleTimer = null;
 
+  /* 球面（照参考视频 3—5 秒的形态）：卡片均匀贴在看不见的球体表面，
+     竖向按纬度分层、横向按经度绕圈，鼠标拖动即整体旋转。
+     yaw/pitch 是相机角度，透视由 JS 按 z 值算出（近大远小 + 压暗）。 */
+  const globe = {
+    yaw: 0.35, pitch: -0.18,
+    vYaw: 0.00021, vPitch: 0,
+    dragging: false, autoSpin: true,
+    radius: 430, flat: 0.62, cardScale: 0.78,   // 椭圆压缩：视频里球面是扁的
+    lastT: 0
+  };
+
   const state = {
-    mode: 'scatter',          // scatter | grid | timeline
+    mode: 'globe',            // globe | scatter | grid | timeline
     window: '', cat: '', source: '', feasible: '', hidden: '',
     q: '',
     picked: null,
@@ -244,6 +255,67 @@
     });
   }
 
+  /* ---------------- 布局：球面（照参考视频 3—5 秒） ----------------
+     把每条信息放到球面的一组经纬点上：
+       竖向分 5 条纬线（赤道上的卡片最大最亮，两极最小最暗，和视频一致）
+       横向把同一纬线上的卡片均匀铺开，逐层错开半个格子，避免上下对齐
+     再用 yaw / pitch 旋转这个球，透视投影后由 z 决定缩放、亮度与层级。
+     拖动时旋转角实时更新，松手后回到自转。 */
+  function layoutGlobe(list) {
+    const W = stageEl.clientWidth, H = stageEl.clientHeight;
+    const R = Math.min(globe.radius, Math.min(W, H) * (W < 620 ? 0.60 : 0.78));
+    const cx = W / 2, cy = H * 0.5;
+    const rows = 5;
+    const per = Math.ceil(list.length / rows);
+    /* 卡片尺寸上限：球面最靠前的卡片放大后也不能顶出画布。
+       不设这个上限时，手机上（375px 宽）球面会横向溢出 21px。 */
+    const maxCardW = Math.max.apply(null, list.map((it) => nodes.get(it.id).tw)) || 160;
+    const boost = 0.58 + 0.50;                       // 最前排的相对放大倍数
+    const fitCard = Math.min(1, (W * 0.30) / (maxCardW * boost));
+    const cy2 = Math.cos(globe.pitch), sy2 = Math.sin(globe.pitch);
+    const out = [];
+
+    list.forEach((it, i) => {
+      const n = nodes.get(it.id);
+      const band = i % rows;                       // 交错分带，避免同列堆叠
+      const k = Math.floor(i / rows);
+      const lat = (-Math.PI / 2) + (band + 0.5) * (Math.PI / rows) * 0.86;   // 纬度
+      const lon = (k / per) * Math.PI * 2 + band * 0.42 + globe.yaw;  // 经度 + 自转
+
+      const cosLat = Math.cos(lat), sinLat = Math.sin(lat);
+      let x = cosLat * Math.sin(lon) * R;
+      let y = sinLat * R * globe.flat;
+      let z = cosLat * Math.cos(lon) * R;
+
+      // 绕 Y 轴（上下转）再绕 X 轴（俯仰）
+      const y2 = y * cy2 - z * sy2;
+      const z2 = y * sy2 + z * cy2;
+      y = y2; z = z2;
+
+      const depth = (z + R) / (2 * R);             // 0 远 → 1 近
+      /* 卡片尺寸与球半径解耦：基准大小由 cardScale 定，depth 只做 ±40% 的近大远小。
+         之前把缩放乘进了半径，半径一大卡片就小得看不清了。 */
+      const sc = globe.cardScale * fitCard * (0.58 + depth * 0.50);
+      const op2 = 0.14 + depth * 0.66;   // 后排压暗但仍可辨，前排清晰
+
+      const halfW = (n.tw * sc) / 2;
+      const pxRaw = cx + x - halfW;
+      const px = Math.max(4, Math.min(W - n.tw * sc - 4, pxRaw));   // 夹在画布内
+      out.push({
+        n,
+        x: px,
+        y: cy + y - (n.th * sc) / 2,
+        r: x / R * 14,                             // 越靠边越倾斜，贴球面的感觉
+        z,
+        scaleOverride: null,
+        globeScale: sc,
+        globeOpacity: op2,
+        zIndex: Math.round(1000 + z)
+      });
+    });
+    return out;
+  }
+
   /* ---------------- 布局：网格（吸附归位，就是视频里那个 2 列） ---------------- */
   function layoutGrid(list) {
     const W = stageEl.clientWidth;
@@ -307,7 +379,8 @@
     allNodes.forEach((n) => { if (visible.indexOf(n) < 0) n.el.classList.add('is-dim'); else n.el.classList.remove('is-dim'); });
 
     let placed;
-    if (state.mode === 'scatter') placed = layoutScatter(rows);
+    if (state.mode === 'globe') placed = layoutGlobe(rows);
+    else if (state.mode === 'scatter') placed = layoutScatter(rows);
     else if (state.mode === 'grid') placed = layoutGrid(rows);
     else placed = layoutTimeline(rows);
 
@@ -326,15 +399,15 @@
 
     placed.forEach((p) => {
       const n = p.n, el = n.el;
-      const sc = n.ts * (p.scaleOverride || 1);
+      const sc = (p.globeScale || n.ts) * (p.scaleOverride || 1);
       el.style.width = ((p.forceW || n.tw) / (p.scaleOverride || 1)) + 'px';
       el.style.height = ((p.forceH || n.th) / (p.scaleOverride || 1)) + 'px';
       el.style.setProperty('--x', Math.round(p.x));
       el.style.setProperty('--y', Math.round(p.y));
       el.style.setProperty('--s', sc);
-      el.style.setProperty('--o', n.to);
+      el.style.setProperty('--o', (p.globeOpacity === undefined ? n.to : p.globeOpacity));
       el.style.setProperty('--r', (p.r || 0).toFixed(2));
-      el.style.setProperty('--z', Math.round(1000 - p.y));
+      el.style.setProperty('--z', p.zIndex !== undefined ? p.zIndex : Math.round(1000 - p.y));
       el.style.transformOrigin = 'top left';
       // 把最终几何写回对象：自查脚本与后续布局都要读它
       n.x = p.x; n.y = p.y; n.finalW = p.forceW || n.tw; n.finalH = p.forceH || n.th;
@@ -344,7 +417,7 @@
     // 网格/时间轴模式下面板里的"位置"要能被看到
     const wrapH = Math.max(
       stageEl.clientHeight,
-      state.mode === 'grid'
+      state.mode === 'globe' ? stageEl.clientHeight : state.mode === 'grid'
         ? placed.reduce((m, p) => Math.max(m, p.y + (p.forceH || p.n.th)), 0) + 11
         : placed.reduce((m, p) => Math.max(m, p.y + p.n.th), 0) + 20
     );
@@ -617,6 +690,96 @@
     '</div>';
   }
 
+  /* ---------------- 球面：自转与拖动 ---------------- */
+  /* 自转用 requestAnimationFrame 推进 yaw，只有在球面模式下才跑；
+     拖动时暂停自转、按指针位移改 yaw/pitch，松手后按惯性继续一会儿。 */
+  let rafId = null;
+  function spinLoop(t) {
+    const dt = globe.lastT ? Math.min(48, t - globe.lastT) : 16;
+    globe.lastT = t;
+    if (state.mode === 'globe') {
+      if (!globe.dragging) {
+        globe.yaw += globe.vYaw * dt;
+        globe.pitch += globe.vPitch * dt;
+        globe.vYaw *= 0.988; globe.vPitch *= 0.988;
+        if (Math.abs(globe.vYaw) < 0.0003 && globe.autoSpin) globe.vYaw = 0.00021;
+        globe.pitch = Math.max(-0.85, Math.min(0.85, globe.pitch));
+      }
+      layoutGlobeOnly();
+    }
+    rafId = requestAnimationFrame(spinLoop);
+  }
+
+  /* 只重排球面：跳过 DOM 同步，保证每帧都够快 */
+  function layoutGlobeOnly() {
+    const rows = filtered();
+    const placed = layoutGlobe(rows);
+    placed.forEach((p) => {
+      const n = p.n, el = n.el;
+      const sc = p.globeScale;
+      el.style.width = (n.tw / 1) + 'px';
+      el.style.height = (n.th / 1) + 'px';
+      el.style.setProperty('--x', Math.round(p.x));
+      el.style.setProperty('--y', Math.round(p.y));
+      el.style.setProperty('--s', sc);
+      el.style.setProperty('--o', p.globeOpacity);
+      el.style.setProperty('--r', (p.r || 0).toFixed(2));
+      el.style.setProperty('--z', p.zIndex);
+      el.style.transformOrigin = 'top left';
+      n.x = p.x; n.y = p.y; n.r = p.r || 0; n.scale = sc;
+      n.finalW = n.tw; n.finalH = n.th;
+    });
+  }
+
+  /* 球面模式下取消过渡：否则每帧都在追一个 720ms 的动画，看着发糊 */
+  function setSphereTransition(on) {
+    nodes.forEach((n) => {
+      n.el.style.transition = on
+        ? 'transform .12s linear, opacity .2s linear'
+        : 'transform .72s cubic-bezier(.16,1,.3,1), opacity .5s ease, box-shadow .2s ease';
+    });
+  }
+
+  let drag = null;
+  stageEl.addEventListener('pointerdown', (e) => {
+    if (state.mode !== 'globe') return;
+    if (e.target.closest('.card')) return;
+    globe.dragging = true;
+    drag = { x: e.clientX, y: e.clientY, yaw: globe.yaw, pitch: globe.pitch };
+    stageEl.setPointerCapture(e.pointerId);
+    stageEl.style.cursor = 'grabbing';
+    setSphereTransition(true);
+  });
+  stageEl.addEventListener('pointermove', (e) => {
+    if (!globe.dragging || !drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    globe.yaw = drag.yaw + dx * 0.005;
+    globe.pitch = Math.max(-0.85, Math.min(0.85, drag.pitch - dy * 0.004));
+    /* 惯性速度必须限幅：松手后靠它继续滑行，不限幅会越转越快
+       （实测松开时 vYaw 会飙到 0.04 量级，一秒转好几圈）。
+       上限 0.0016 rad/ms ≈ 1.6 rad/s，约 4 秒一圈，滑行手感正常。 */
+    const MAXV = 0.0016;
+    globe.vYaw = Math.max(-MAXV, Math.min(MAXV, dx * 0.00013));
+    globe.vPitch = Math.max(-MAXV / 2, Math.min(MAXV / 2, -dy * 0.00008));
+  });
+  const endDrag = (e) => {
+    if (!globe.dragging) return;
+    globe.dragging = false; drag = null;
+    stageEl.style.cursor = '';
+    try { stageEl.releasePointerCapture(e.pointerId); } catch { /* 忽略 */ }
+  };
+  stageEl.addEventListener('pointerup', endDrag);
+  stageEl.addEventListener('pointercancel', endDrag);
+
+  /* 球面上滚轮缩放半径 */
+  stageEl.addEventListener('wheel', (e) => {
+    if (state.mode !== 'globe') return;
+    e.preventDefault();
+    globe.radius = Math.max(180, Math.min(560, globe.radius - e.deltaY * 0.6));
+    setSphereTransition(true);
+    layoutGlobeOnly();
+  }, { passive: false });
+
   /* ---------------- 事件 ---------------- */
   function toast(msg) {
     toastEl.textContent = msg;
@@ -626,11 +789,16 @@
   }
 
   modesEl.addEventListener('click', (e) => {
+    const mineBtn = e.target.closest('[data-act="mine"]');
+    if (mineBtn) { openMine(); return; }
     const b = e.target.closest('[data-mode]');
     if (!b) return;
     state.mode = b.getAttribute('data-mode');
-    modesEl.querySelectorAll('.mode').forEach((m) => m.classList.toggle('is-on', m === b));
+    modesEl.querySelectorAll('.mode[data-mode]').forEach((m) => m.classList.toggle('is-on', m === b));
     canvasEl.dataset.mode = state.mode;
+    setSphereTransition(state.mode === 'globe');
+    // 从球面切走时把 yaw 归零，避免网格里带着旋转
+    if (state.mode !== 'globe') { globe.yaw = 0; globe.pitch = -0.18; }
     layout(true);
   });
 
@@ -769,7 +937,7 @@
     if (e.key === 'Escape') { closePanel(); return; }
     if (typing) return;
     if (e.key === '/') { const q = document.getElementById('q'); if (q) { e.preventDefault(); q.focus(); q.select(); } return; }
-    const keys = { '1': 'scatter', '2': 'grid', '3': 'timeline' };
+    const keys = { '1': 'globe', '2': 'scatter', '3': 'grid', '4': 'timeline' };
     if (keys[e.key]) {
       const b = modesEl.querySelector('[data-mode="' + keys[e.key] + '"]');
       if (b) b.click();
@@ -795,6 +963,7 @@
     document.documentElement.setAttribute('data-theme', th);
     document.getElementById('themeBtn').textContent = th === 'dark' ? 'D' : 'L';
     canvasEl.dataset.mode = state.mode;
+    setSphereTransition(false);
     strip();
     // 初始：所有卡片从画布外聚拢进来，形成"散落出现"的入场
     const rows = filtered();
@@ -809,10 +978,12 @@
       n.el.style.transformOrigin = 'top left';
     });
     requestAnimationFrame(() => requestAnimationFrame(() => layout()));
+    requestAnimationFrame(spinLoop);
   })();
 
   window.__App = {
     state, layout, openDetail, openMine, openPublish, openGate, closePanel, filtered, nodes,
+    globe, setSphereTransition, layoutGlobeOnly,
     get settled() { return settled; }
   };
 })();

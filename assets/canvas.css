@@ -407,3 +407,35 @@ textarea { resize: vertical; min-height: 76px; }
   .card { transition: none !important; }
   .panel { animation: none !important; }
 }
+
+/* ========================== 球面模式 ========================== */
+/* 球面上卡片贴着"看不见的球"：近大远小、越靠边越倾斜、远处压暗 */
+.canvas[data-mode="globe"] { cursor: grab; }
+.canvas[data-mode="globe"]:active { cursor: grabbing; }
+.canvas[data-mode="globe"] .card { cursor: pointer; }
+.canvas[data-mode="globe"] .card__title { font-size: 11px; -webkit-line-clamp: 2; }
+.canvas[data-mode="globe"] .card__no { font-size: 9.5px; padding: 6px 8px 0; }
+.canvas[data-mode="globe"] .card__body { padding: 3px 8px 0; }
+.canvas[data-mode="globe"] .card__foot { padding: 6px 8px; font-size: 8.5px; }
+.canvas[data-mode="globe"] .card__foot .pill { font-size: 8px; padding: 1px 6px; }
+.canvas[data-mode="globe"] .card:hover { box-shadow: 0 0 0 1px var(--page), 0 0 0 3px var(--ink); }
+
+/* 球面模式下顶栏的提示 */
+.canvas[data-mode="globe"] ~ .foot .foot__meta { opacity: 1; }
+
+/* ========================== 移动端溢出防护 ==========================
+   筛选条是可横向滚动的，但没被约束宽度，导致它把整个文档撑出横向滚动。
+   顶栏右侧同理。两者都必须能被内部裁剪或收缩，而不是推宽文档。 */
+html, body { max-width: 100%; overflow-x: hidden; }
+.bar { min-width: 0; }
+.bar__right { min-width: 0; flex-shrink: 1; }
+.bar__modes { min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
+.strip { max-width: 100%; min-width: 0; }
+.stage { max-width: calc(100% - var(--unit) * 2); }
+
+@media (max-width: 720px) {
+  .bar { flex-wrap: wrap; height: auto; padding-bottom: 6px; }
+  .bar__modes { order: 3; width: 100%; justify-content: flex-start; margin-left: 0; overflow-x: auto; flex-wrap: nowrap; }
+  .mode { flex: none; }
+  .strip { padding: 0 6px; }
+}
