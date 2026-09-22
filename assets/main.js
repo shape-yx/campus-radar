@@ -40,6 +40,8 @@
       window.scrollTo({ top: 0, behavior: 'auto' });
       lastPath = path;
     }
+    const chip = document.getElementById('chipNow');
+    if (chip) chip.innerHTML = '<b>' + ((TITLES[segs[0] || ''] || '页面')) + '</b>';
     syncNav(segs[0] || '');
     V.afterRender(segs[0] || '', query);
   }

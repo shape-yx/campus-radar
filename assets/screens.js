@@ -33,10 +33,10 @@
   }
 
   function sectionHead(title, note, right) {
-    return '<div class="section__head">' +
+    return '<div class="blockhead">' +
       '<h2>' + esc(title) + '</h2>' +
-      (note ? '<span class="label">' + esc(note) + '</span>' : '<span></span>') +
-      (right || '<span></span>') +
+      (note ? '<span class="count">' + esc(note) + '</span>' : '') +
+      (right || '') +
     '</div>';
   }
 
@@ -95,27 +95,27 @@
             const map = { ok: openOk, check: needCheck, blocked: blocked };
             const list = map[sec] || [];
             const names = { ok: '现在就能参加', check: '需先向主办方确认', blocked: '按你的情况暂不符合' };
-            return '<section class="section">' +
+            return '<section class="slab">' +
               sectionHead(names[sec] + '（' + list.length + '）', '按报名截止从近到远',
                 '<a class="btn btn--sm" href="#/">收起</a>') +
               (list.length
-                ? '<div class="rows">' + App.sortByDeadline(list).map((it, i) => App.record(it, i, { showGaps: sec !== 'ok' })).join('') + '</div>'
+                ? '<div class="grid">' + App.sortByDeadline(list).map((it, i) => App.card(it, i)).join('') + '</div>'
                 : '<div class="empty"><strong>这一档目前是空的</strong><p>换个档位看看，或到「索引」里按条件筛选。</p></div>') +
             '</section>';
           })()
         : '') +
 
       (week.length
-        ? '<section class="section">' +
+        ? '<section class="slab">' +
           sectionHead('7 天内到报名截止的 ' + week.length + ' 条', '过了就报不上，先处理这些') +
-          '<div class="rows">' + week.map((it, i) => App.record(it, i)).join('') + '</div>' +
+          '<div class="grid">' + week.map((it, i) => App.card(it, i)).join('') + '</div>' +
           '</section>'
         : '') +
 
-      '<section class="section">' +
+      '<section class="slab">' +
         sectionHead('全部条目', '按报名截止从近到远，已排除你暂不符合条件的',
           '<a class="btn btn--sm" href="#/list">去筛选 →</a>') +
-        '<div class="rows">' + soon.map((it, i) => App.record(it, i)).join('') + '</div>' +
+        '<div class="grid">' + soon.map((it, i) => App.card(it, i)).join('') + '</div>' +
         (all.filter((it) => it.fit.level !== 'blocked').length > soon.length
           ? '<div class="btn-row" style="margin-top:16px"><a class="btn" href="#/list">查看全部 ' +
             all.filter((it) => it.fit.level !== 'blocked').length + ' 条 →</a></div>'
@@ -137,7 +137,7 @@
       ['发布方', '材料没写发布方的一律显示「材料未注明」', '原先我写过"活动方/课题组"这类名称，材料并没有，已删除'],
       ['状态 / 适配', '「可报名 / 已截止」按材料时间与当前时间算出；「适合你」按你填的年级与可投入时间比对', '这两类是产品判断，不是材料原文']
     ];
-    return '<section class="section">' +
+    return '<section class="slab">' +
       '<details class="fold">' +
         '<summary>数据处理说明<span>材料没写全的地方，我们是怎么处理的（' + rows.length + ' 类）</span></summary>' +
         '<div class="block" style="border-top:none;padding-top:14px">' +
@@ -252,7 +252,7 @@
         '<p>换个关键词，或清空筛选条件再看看。</p>' +
         '<div class="btn-row" style="justify-content:center;margin-top:16px"><a class="btn" href="#/list">清空筛选</a></div></div>';
     }
-    return '<div class="rows">' + rows.map((it, i) => App.record(it, i, { showConflict: true, showGaps: true })).join('') + '</div>';
+    return '<div class="grid">' + rows.map((it, i) => App.card(it, i)).join('') + '</div>';
   }
 
   function refreshList(q) {
@@ -323,9 +323,9 @@
         : '<div class="empty"><strong>接下来没有已确定时间的安排</strong><p>长期开放或时间未注明的信息，请到「索引」里看。</p></div>') +
 
       (missed.length
-        ? '<section class="section">' +
+        ? '<section class="slab">' +
           sectionHead('已错过的 ' + missed.length + ' 条', '列出来是为了知道下一次什么时候看') +
-          '<div class="rows">' + missed.map((it, i) => App.record(it, i)).join('') + '</div>' +
+          '<div class="grid">' + missed.map((it, i) => App.card(it, i)).join('') + '</div>' +
           '</section>'
         : '') +
     '</div>';
@@ -346,7 +346,7 @@
       ['报名方式', it.applyHow],
       ['发布方', it.publisher]
     ];
-    return '<section class="section">' +
+    return '<section class="slab">' +
       sectionHead('材料给出的条件', '未列出的项目表示材料未提供，产品不做补全') +
       '<div class="dl">' + rows.map(([k, v]) =>
         '<dt>' + esc(k) + '</dt><dd' + (v ? '' : ' class="empty"') + '>' + esc(v || '未注明') + '</dd>').join('') + '</div>' +
@@ -360,7 +360,7 @@
     const f = it.fit;
     const p = Store.profile();
     const gradeCn = { 1: '大一', 2: '大二', 3: '大三', 4: '大四' }[p.grade] || '大一';
-    return '<div class="fit fit--' + f.level + '">' +
+    return '<div class="slab fit fit--' + f.level + '">' +
       '<div class="fit__verdict">' + esc(f.label) + '</div>' +
       '<p class="label" style="margin-top:8px">按你的情况：' + esc(gradeCn) + ' · 每周约 ' + p.hours + ' 小时' +
         '　·　<a href="#/mine" style="color:var(--accent)">改我的情况</a></p>' +
@@ -378,7 +378,7 @@
       x.signupBy ? '报名截止 ' + Radar.fmtDT(x.signupBy) : ''].filter(Boolean).join('　·　') || '材料未给出时间地点';
     const rows = [{ tag: '原始通知', title: it.title, body: fact(it) }]
       .concat(it.updates.map((u) => ({ tag: '后续通知', title: u.title, body: fact(u) })));
-    return '<section class="section">' +
+    return '<section class="slab">' +
       sectionHead('这件事被通知了 ' + rows.length + ' 次', '以最新一条为准') +
       '<div class="timeline">' + rows.map((r, i) =>
         '<div class="tstep' + (i === rows.length - 1 ? ' tstep--last' : '') + '">' +
@@ -407,15 +407,15 @@
 
     let body;
     if (tab === 'fit') {
-      body = fitPanel(it) +
-        '<section class="section">' + sectionHead('材料里没写、需要向主办方确认的项', it.unconfirmed.length + ' 项') +
+      body = '<div class="grid" style="grid-template-columns:minmax(0,1fr)">' + fitPanel(it) +
+        '<section class="slab">' + sectionHead('材料里没写、需要向主办方确认的项', it.unconfirmed.length + ' 项') +
           (it.unconfirmed.length
             ? '<ul class="list-plain">' + it.unconfirmed.map((u) => '<li>' + esc(u) + '</li>').join('') + '</ul>'
             : '<p class="muted">这几项上材料的信息是完整的。</p>') +
           '<p class="label" style="margin-top:12px">材料没写的一律显示「未注明」，不补全、不猜</p>' +
         '</section>';
     } else if (tab === 'raw') {
-      body = '<section class="section">' +
+      body = '<div class="grid" style="grid-template-columns:minmax(0,1fr)"><section class="slab">' +
         sectionHead('材料原文关键信息', '不做改写') +
         '<div class="dl">' +
           '<dt>材料编号</dt><dd>第 ' + App.idx(it.seq) + ' 条</dd>' +
@@ -434,23 +434,24 @@
         '<p class="label" style="margin-top:14px">以上为材料实际写出的内容；未提供的项目显示「未注明」，没有做任何补全</p>' +
       '</section>' +
       (it.trust.flags.length
-        ? '<section class="section">' + sectionHead('这条被标为「' + it.trust.label + '」的原因') +
+        ? '<section class="slab">' + sectionHead('这条被标为「' + it.trust.label + '」的原因') +
           '<ul class="list-plain">' + it.trust.flags.map((u) => '<li>' + esc(u) + '</li>').join('') + '</ul>' +
           '<p class="muted" style="margin-top:12px;font-size:13.5px">这不代表它一定有问题，但它在校园活动应有的信息上缺口较大，请自行判断并向发布者核实。</p>' +
           '</section>'
-        : '');
+        : '') + '</div>';
     } else {
       body = fitPanel(it) + facts(it) +
         (it.unconfirmed.length
-          ? '<div class="notice notice--info"><div><div class="notice__title">材料里还有 ' + it.unconfirmed.length + ' 项没写</div>' +
+          ? '<div class="slab notice notice--info"><div><div class="notice__title">材料里还有 ' + it.unconfirmed.length + ' 项没写</div>' +
             it.unconfirmed.map((u) => '<div class="notice__item">' + esc(u) + '</div>').join('') + '</div></div>'
-          : '');
+          : '') + '</div>';
     }
 
     return '<div class="view">' +
-      '<p class="label" style="padding-top:22px"><a href="#/list">← 返回索引</a></p>' +
+      '<p class="label" style="padding:4px 2px"><a href="#/list">← 返回索引</a></p>' +
 
-      '<header class="detail-head">' +
+      '<div class="grid" style="grid-template-columns:minmax(0,1fr);gap:11px">' +
+      '<header class="slab detail-head">' +
         '<div class="detail-head__top">' +
           '<span class="label">第 ' + App.idx(it.seq) + ' 条</span>' +
           App.statusMark(it) +
@@ -483,11 +484,10 @@
           '<button class="tab' + (tab === k ? ' is-on' : '') + '" type="button" data-action="tab" data-tab="' + k + '">' + esc(l) + '</button>').join('') +
       '</nav>' +
 
-      body +
-      timelineOf(it) +
+      body + timelineOf(it) + '</div>' +
 
       (it.downgraded
-        ? '<section class="section">' + sectionHead('这条被降权显示') +
+        ? '<section class="slab">' + sectionHead('这条被降权显示') +
           '<p class="muted" style="font-size:14px">它来自开放发布，但带有明显的推广特征，因此默认不出现在索引里。你仍然能看到它，也可以举报。</p>' +
           '<div class="btn-row" style="margin-top:14px">' +
             '<button class="btn btn--accent" type="button" data-action="report" data-id="' + esc(it.id) + '">举报这条内容</button>' +
@@ -511,7 +511,7 @@
     return '<div class="view">' +
       pagehead(['Restricted', '需要管理员口令'], '发布<em>入口</em>',
         '发布入口默认隐藏 —— 开放发布容易让同学被无关的商业信息刷屏，所以把发布权限收起来，只给管理员使用。') +
-      (msg ? '<div class="notice notice--warn"><div class="notice__title">' + esc(msg) + '</div></div>' : '') +
+      (msg ? '<div class="slab notice notice--warn"><div class="notice__title">' + esc(msg) + '</div></div>' : '') +
       '<form id="adminForm" style="max-width:420px;margin-top:20px">' +
         '<div class="field"><label class="field__label" for="adminPass">管理员口令</label>' +
           '<input type="password" id="adminPass" name="pass" autocomplete="current-password" placeholder="请输入管理员口令">' +
@@ -620,7 +620,7 @@
     if (/日结|零门槛|返利|兼职/i.test(v('title'))) flags.push('标题出现"日结 / 零门槛 / 兼职"等词，容易被判为疑似推广而降权');
     if (/http|www\.|链接|扫码/i.test(v('title') + v('mustKnow'))) flags.push('正文带有购买链接或二维码引导，会被降权');
 
-    return '<section class="section">' +
+    return '<section class="slab">' +
       sectionHead('发布前自检', '信息完整度 ' + pct + '%', '<span class="label">' + done + ' / ' + CHECKS.length + '</span>') +
       '<div class="dl">' + CHECKS.map(([k, label, hint]) =>
         '<dt>' + (has[k] ? '✓ ' : '○ ') + esc(label) + '</dt><dd>' + esc(hint) + '</dd>').join('') + '</div>' +
@@ -686,11 +686,11 @@
     let panel = '';
     if (cur) {
       const [k, label, list, emptyMsg] = cur;
-      panel = '<section class="section">' +
+      panel = '<section class="slab">' +
         sectionHead(label + '（' + list.length + '）', '', '<a class="btn btn--sm" href="#/mine">收起</a>') +
         (list.length
-          ? '<div class="rows">' + list.map((it, i) =>
-              App.record(it, i, { showGaps: k === 'mine' }) +
+          ? '<div class="directory">' + list.map((it, i) =>
+              App.dirrow(it, i, { showGaps: k === 'mine' }) +
               '<div class="btn-row" style="padding:0 0 14px 68px;margin-top:-10px">' +
                 '<a class="btn btn--sm" href="#/item/' + esc(it.id) + '">查看</a>' +
                 '<button class="btn btn--sm" type="button" data-action="' +
@@ -709,12 +709,12 @@
         '<b>' + App.idx(saved.length + joined.length + mineItems.length) + '</b><br>条标记') +
 
       (missed.length
-        ? '<div class="notice notice--warn"><div><div class="notice__title">你标记过报名，但已经错过截止时间</div>' +
+        ? '<div class="slab notice notice--warn"><div><div class="notice__title">你标记过报名，但已经错过截止时间</div>' +
           missed.map((it) => '<div class="notice__item"><a href="#/item/' + esc(it.id) + '">' + esc(it.title) + '</a>' +
             '<span class="label">' + esc(it.deadline ? it.deadline.text : '') + ' 截止</span></div>').join('') + '</div></div>'
         : '') +
       (urgent.length
-        ? '<div class="notice notice--info"><div><div class="notice__title">3 天内会有截止</div>' +
+        ? '<div class="slab notice notice--info"><div><div class="notice__title">3 天内会有截止</div>' +
           urgent.map((it) => '<div class="notice__item"><a href="#/item/' + esc(it.id) + '">' + esc(it.title) + '</a>' +
             '<span class="label">' + esc(it.deadline.label) + ' · ' + esc(it.deadline.text) + '</span></div>').join('') + '</div></div>'
         : '') +
@@ -722,7 +722,7 @@
       tiles +
       panel +
 
-      '<section class="section">' +
+      '<section class="slab">' +
         sectionHead('我的情况', '决定「适合你」的判断') +
         '<form id="profileForm">' +
           '<div class="form-grid">' +
@@ -748,7 +748,7 @@
 
       adminBlock() +
 
-      '<section class="section">' +
+      '<section class="slab">' +
         sectionHead('数据管理', '数据存在本机浏览器，刷新不丢') +
         '<div class="btn-row">' +
           '<button class="btn" type="button" data-action="export-json">导出备份 JSON</button>' +
@@ -763,12 +763,12 @@
   function adminBlock() {
     const on = Store.adminUnlocked();
     if (!on) {
-      return '<section class="section">' +
+      return '<section class="slab">' +
         sectionHead('发布权限', '已锁定', '<a class="btn btn--sm" href="#/publish">输入口令</a>') +
         '<p class="muted" style="font-size:14px">发布入口默认隐藏：同学能浏览、收藏、标记报名，但发布需要管理员口令。</p>' +
       '</section>';
     }
-    return '<section class="section">' +
+    return '<section class="slab">' +
       sectionHead('发布权限', '管理员已解锁', '<button class="btn btn--sm" type="button" data-action="admin-logout">退出</button>') +
       '<form id="adminPassForm" style="margin-top:8px">' +
         '<div class="form-grid">' +

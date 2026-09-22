@@ -83,36 +83,57 @@
 
   App.sortByDeadline = (list) => list.slice().sort((a, b) => App.deadlineMs(a) - App.deadlineMs(b));
 
-  /* ---------------- 记录行：全站统一的条目形态 ----------------
-     布局：索引 | 标题 + 标签 + 元信息 | 状态列 | 操作列            */
-  App.record = function (it, i, opts) {
-    const o = opts || {};
-    const tags = (it.tags || []).slice(0, 3);
-    const kb = (k, v) => '<span class="kv"><b>' + esc(k) + '</b><span>' + (v ? esc(v) : '—') + '</span></span>';
+  /* ---------------- 卡片：照视频的 Work 网格 ----------------
+     结构 = 黑色方块 + 媒体居中（这里用条目编号做图形占位）+ 底部元信息栏
+     元信息栏：左侧 [分类] 胶囊 + 标题，右侧等宽小字放状态与截止          */
+  App.card = function (it, i) {
+    const pill = (t, cls) => '<span class="pill' + (cls ? ' ' + cls : '') + '">' + esc(t) + '</span>';
+    const statusCls = { open: 'pill--ok', upcoming: '', ongoing: 'pill--accent', closed: 'pill--dim',
+      ended: 'pill--dim', rolling: 'pill--dim', started: 'pill--dim', unknown: 'pill--warn' }[it.status.key] || '';
+    const dlCls = it.deadline && it.deadline.tone === 'danger' ? 'pill--accent'
+      : (it.deadline && it.deadline.tone === 'warn' ? 'pill--warn' : 'pill--dim');
 
-    return '<article class="row">' +
-      '<div class="row__idx">' + App.idx(i + 1) + '</div>' +
-
-      '<div class="row__main">' +
-        '<a class="row__title" href="#/item/' + esc(it.id) + '">' + esc(it.title) + '</a>' +
-        '<div class="row__tags">' + tags.map((t) => '<span class="label">' + esc(t) + '</span>').join('') +
-          '<span class="label">' + esc(it.cat) + '</span>' +
-        '</div>' +
-      '</div>' +
-
-      '<div class="row__meta">' +
-        kb('时间', it.when.when || '未注明') +
-        kb('地点', it.where.text) +
-        kb('截止', it.deadline ? it.deadline.text : '未注明') +
-        (o.showConflict && it.updates && it.updates.length ? kb('关联', '另有 ' + it.updates.length + ' 条补充通知') : '') +
-        (o.showGaps && it.unconfirmed.length ? kb('缺失', it.unconfirmed.length + ' 项未注明') : '') +
-      '</div>' +
-
-      '<div class="row__side">' +
-        App.statusMark(it) + App.fitMark(it) +
-        '<a class="btn btn--sm" href="#/item/' + esc(it.id) + '">查看 →</a>' +
+    return '<article class="card' + (it.downgraded ? ' card--promo' : '') + '">' +
+      '<a class="card__media" href="#/item/' + esc(it.id) + '" aria-label="' + esc(it.title) + '">' +
+        '<span class="card__glyph">' + App.idx(i + 1) + '</span>' +
+        '<span class="card__banner">' +
+          '<span>' + esc(it.cat) + '</span>' +
+          '<span>' + esc(it.source === 'official' ? '学校 / 学院' : it.source === 'student' ? '学生发布' : '来源不明') + '</span>' +
+          (it.updates && it.updates.length ? '<span>有 ' + it.updates.length + ' 条补充通知</span>' : '') +
+          (it.downgraded ? '<span>已降权</span>' : '') +
+        '</span>' +
+      '</a>' +
+      '<div class="card__meta">' +
+        pill(it.cat) +
+        '<a class="title" href="#/item/' + esc(it.id) + '">' + esc(it.title) + '</a>' +
+        '<span class="dim">' + pill(it.status.label, statusCls) +
+          (it.deadline ? pill(it.deadline.label, dlCls) : '') + '</span>' +
       '</div>' +
     '</article>';
+  };
+
+  /* ---------------- 目录行：用于时间轴 / 我的等需要紧凑罗列的地方 ---------------- */
+  App.dirrow = function (it, i, opts) {
+    const o = opts || {};
+    const kb = (k, v) => '<span class="kv"><b>' + esc(k) + '</b><span>' + esc(v || '—') + '</span></span>';
+    const MC = { open: '', upcoming: '', ongoing: 'pill--accent', closed: 'pill--dim',
+      ended: 'pill--dim', rolling: 'pill--dim', started: 'pill--dim', unknown: 'pill--warn' };
+    return '<div class="dirrow">' +
+      '<div class="dirrow__idx">' + App.idx(i + 1) + '</div>' +
+      '<div>' +
+        '<a class="dirrow__title" href="#/item/' + esc(it.id) + '">' + esc(it.title) + '</a>' +
+        '<div class="btn-row" style="margin-top:8px">' +
+          '<span class="pill ' + (MC[it.status.key] || 'pill--dim') + '">' + esc(it.status.label) + '</span>' +
+          (it.deadline ? '<span class="pill ' + (it.deadline.tone === 'danger' ? 'pill--accent' : 'pill--dim') + '">' + esc(it.deadline.label) + '</span>' : '') +
+        '</div>' +
+      '</div>' +
+      '<div class="dirrow__meta">' +
+        kb('时间', it.when.when || '未注明') +
+        kb('地点', it.where.text) +
+        (o.showGaps && it.unconfirmed.length ? kb('缺失', it.unconfirmed.length + ' 项') : '') +
+      '</div>' +
+      '<div class="dirrow__side"><a class="btn btn--sm" href="#/item/' + esc(it.id) + '">查看 →</a></div>' +
+    '</div>';
   };
 
   /* ---------------- 吐司 ---------------- */

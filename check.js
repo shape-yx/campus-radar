@@ -138,37 +138,41 @@ async function main() {
   check('无未捕获 JS 异常', pageErrors.length === 0, pageErrors.join(' | ') || '0 条');
   check('无 console.error', consoleErrors.length === 0, consoleErrors.join(' | ') || '0 条');
 
-  /* ---------------- 2. 版式：编辑式设计是否真的生效 ---------------- */
+  /* ---------------- 2. 版式：照视频还原的橄榄栅格是否真的生效 ----------------
+     参照值来自视频帧实测：页面底 #94a04b、卡片 #000、2 列、缝隙 11px、全直角 */
   const navIdx = await evaluate("[].map.call(document.querySelectorAll('#nav a i'),function(e){return e.textContent}).join('')");
-  check('导航带索引编号', navIdx.value === '12345', '编号 ' + navIdx.value);
+  check('导航带方括号编号', navIdx.value === '12345', '编号 ' + navIdx.value);
 
-  const heroSize = await evaluate("parseFloat(getComputedStyle(document.querySelector('.hero-words')).fontSize)");
-  check('首屏巨型标题（≥ 60px）', Number(heroSize.value) >= 60, heroSize.value + 'px');
+  const pageBg = await evaluate("getComputedStyle(document.body).backgroundColor");
+  check('页面底色为橄榄黄绿 #94a04b', /rgb\(148, 160, 75\)/.test(String(pageBg.value)), String(pageBg.value));
 
-  const heroLines = await evaluate("(function(){var s=document.querySelectorAll('.hero-words span');var ys=[].map.call(s,function(x){return Math.round(x.getBoundingClientRect().top)});return ys.length+'/'+new Set(ys).size})()");
-  check('巨型标题每个词独占一行', String(heroLines.value) === '3/3', String(heroLines.value));
-
-  const mono = await evaluate("getComputedStyle(document.querySelector('.label')).fontFamily");
-  check('标签使用等宽字体', /mono|Menlo|Consolas/i.test(String(mono.value)), String(mono.value).slice(0, 24));
-
-  const pal = await evaluate("getComputedStyle(document.body).backgroundColor");
-  check('底色为纸白（近黑白）', /rgb\(243, 241, 236\)/.test(String(pal.value)), String(pal.value));
+  const chip = await evaluate("(function(){var e=document.querySelector('.chip-now');return e?getComputedStyle(e).borderRadius+'|'+e.textContent.trim():'缺失'})()");
+  check('右上角区块胶囊（圆角 + 当前区块名）', /^999px\|/.test(String(chip.value)), String(chip.value));
 
   await go('#/list');
-  const accentCount = await evaluate("[].filter.call(document.querySelectorAll('*'),function(e){return getComputedStyle(e).color==='rgb(180, 35, 42)'}).length");
-  check('强调色只用在少量元素（≤ 30）', Number(accentCount.value) <= 30, accentCount.value + ' 个');
+  const cardBg = await evaluate("getComputedStyle(document.querySelector('.card')).backgroundColor");
+  check('卡片底色为纯黑 #000', /rgb\(0, 0, 0\)/.test(String(cardBg.value)), String(cardBg.value));
 
-  const cols = await evaluate("getComputedStyle(document.querySelector('.row')).gridTemplateColumns.split(' ').length");
-  check('索引项为细线多列栅格', Number(cols.value) >= 3, cols.value + ' 列');
+  const gridGap = await evaluate("getComputedStyle(document.querySelector('.grid')).gap");
+  check('卡片之间留出橄榄缝隙（gap ≈ 11px）', String(gridGap.value) === '11px', String(gridGap.value));
 
-  const hair = await evaluate("getComputedStyle(document.querySelector('.row')).borderBottomWidth");
-  check('分隔线为 1px 细线', String(hair.value) === '1px', String(hair.value));
+  const twoCols = await evaluate("getComputedStyle(document.querySelector('.grid')).gridTemplateColumns.split(' ').length");
+  check('栅格为 2 列', Number(twoCols.value) === 2, twoCols.value + ' 列');
+
+  const radius = await evaluate("getComputedStyle(document.querySelector('.card')).borderRadius");
+  check('卡片为全直角（无圆角）', String(radius.value) === '0px', String(radius.value));
+
+  const metaBar = await evaluate("(function(){var e=document.querySelector('.card__meta');if(!e)return '缺失';var p=document.querySelector('.pill');return getComputedStyle(e).borderTopWidth+'|'+(p?getComputedStyle(p).borderRadius:'无胶囊')})()");
+  check('卡片底部元信息栏 + [分类] 胶囊', /1px\|999px/.test(String(metaBar.value)), String(metaBar.value));
+
+  const halo = await evaluate("(function(){var g=document.querySelector('.footer__giant');var s=getComputedStyle(g);return s.fontSize+'|'+s.color})()");
+  check('页脚一行巨大橄榄色大字', /px\|rgba?\(0, 0, 0/.test(String(halo.value)), String(halo.value).slice(0, 34));
   await shot('01-list');
 
   /* ---------------- 3. 六个屏幕都能渲染 ---------------- */
   const screens = [
-    ['今天', '#/', '.hero-words', 'home'],
-    ['索引', '#/list', '.rows .row', 'list'],
+    ['今天', '#/', '.card', 'home'],
+    ['索引', '#/list', '.grid .card', 'list'],
     ['时间轴', '#/calendar', '.tl-item', 'calendar'],
     ['发布（口令门）', '#/publish', '#adminForm', 'gate'],
     ['我的', '#/mine', '.statbar', 'mine'],
@@ -269,8 +273,8 @@ async function main() {
     return 'ok';
   })()`);
   await sleep(450);
-  const pct = await evaluate("(function(){var e=document.querySelectorAll('.section__head .label');return e.length?e[e.length-1].textContent:'';})()");
-  check('发布自检面板随填写更新', /6/.test(String(pct.value)), '自检 ' + String(pct.value));
+  const pct = await evaluate("[].filter.call(document.querySelectorAll('.slab .label'),function(e){return /\\d \\/ 6/.test(e.textContent)}).map(function(e){return e.textContent}).join('')");
+  check('发布自检面板随填写更新（6 / 6）', /6 \/ 6/.test(String(pct.value)), '自检 ' + String(pct.value));
 
   await evaluate("(function(){document.getElementById('publishForm').requestSubmit();return 'ok';})()");
   await sleep(650);
@@ -278,7 +282,7 @@ async function main() {
   check('发布后进入新内容详情页', /^#\/item\/u/.test(String(hash.value)), String(hash.value));
 
   await go('#/list');
-  const inList = await evaluate("[].some.call(document.querySelectorAll('.row__title'),function(a){return a.textContent.indexOf('编辑式版测试')>=0})");
+  const inList = await evaluate("[].some.call(document.querySelectorAll('.card__meta .title'),function(a){return a.textContent.indexOf('编辑式版测试')>=0})");
   check('自己发布的内容进入索引', inList.value === true, String(inList.value));
 
   await go('#/calendar');
@@ -292,8 +296,8 @@ async function main() {
 
   for (const [k, label, n] of [['saved', '我收藏的', 1], ['joined', '我标记报名的', 1], ['mine', '我发布的', 1], ['hidden', '已忽略的', 0]]) {
     await go('#/mine?sec=' + k);
-    const rows = await evaluate("document.querySelectorAll('.section .row').length");
-    const title = await evaluate("(function(){var e=document.querySelector('.section__head h2');return e?e.textContent:'';})()");
+    const rows = await evaluate("document.querySelectorAll('.directory .dirrow').length");
+    const title = await evaluate("(function(){var hs=document.querySelectorAll('.blockhead h2');for(var i=0;i<hs.length;i++){var t=hs[i].textContent;if(t.indexOf('我收藏')===0||t.indexOf('我标记')===0||t.indexOf('我发布')===0||t.indexOf('已忽略')===0)return t}return ''})()");
     if (n > 0) {
       check('展开「' + label + '」能看到 ' + n + ' 条', Number(rows.value) === n && String(title.value).indexOf(label) >= 0,
         rows.value + ' 条 · ' + String(title.value));
@@ -311,7 +315,7 @@ async function main() {
   await sleep(320);
   const t2 = await evaluate("document.documentElement.getAttribute('data-theme')");
   const bg2 = await evaluate("getComputedStyle(document.body).backgroundColor");
-  check('主题可切换且底色随之变化', t1.value !== t2.value && /rgb\(13, 13, 13\)/.test(String(bg2.value)),
+  check('主题可切换且底色随之变化', t1.value !== t2.value && /rgb\(58, 64, 32\)/.test(String(bg2.value)),
     t1.value + ' → ' + t2.value + ' ' + bg2.value);
   await evaluate("(function(){document.getElementById('themeBtn').click();return 'ok';})()");
   await sleep(250);
