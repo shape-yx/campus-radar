@@ -52,6 +52,23 @@
   </div>
 </footer>
 
+<!-- 右侧缩放条：拖动改变画布比例（桌面端） -->
+<div class="zoombar" id="zoombar" aria-label="画布缩放">
+  <button class="zoombar__btn" type="button" data-zoom="in" title="放大（+）">+</button>
+  <div class="zoombar__track" id="zoomTrack" role="slider"
+       aria-label="画布缩放比例" aria-valuemin="50" aria-valuemax="200" aria-valuenow="100" tabindex="0">
+    <div class="zoombar__rail"></div>
+    <div class="zoombar__fill" id="zoomFill"></div>
+    <div class="zoombar__knob" id="zoomKnob"></div>
+    <span class="zoombar__tick" style="bottom:0%">50</span>
+    <span class="zoombar__tick" style="bottom:25%">100</span>
+    <span class="zoombar__tick" style="bottom:50%">150</span>
+    <span class="zoombar__tick" style="bottom:75%">200</span>
+  </div>
+  <button class="zoombar__btn" type="button" data-zoom="out" title="缩小（−）">−</button>
+  <button class="zoombar__btn zoombar__btn--val" type="button" data-zoom="reset" id="zoomVal" title="点击恢复 100%">100%</button>
+</div>
+
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script src="assets/data.js"></script>

@@ -452,3 +452,96 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .canvas[data-mode="timeline"] .card { transition: transform .18s cubic-bezier(.16,1,.3,1), opacity .3s ease; }
 /* 拖动期间：卡片不响应指针，避免拖动结束时误触发打开 */
 .canvas.is-panning .card { pointer-events: none; }
+
+/* ========================== 右侧缩放条 ==========================
+   竖排细条贴在窗口右缘：上下各一个加减按钮，中间是可拖动的滑轨，
+   底部一个方框显示当前比例（点击回到 100%）。
+   轨道从下往上对应 50% → 200%，与"往上放大"的直觉一致。 */
+.zoombar {
+  position: fixed;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1100;                 /* 高于卡片，低于侧栏与吐司 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--page) 82%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  user-select: none;
+  /* 容器本身不吃指针，只有按钮与滑轨可交互。
+     否则这条浮在右边缘的控件会挡住画布右侧的拖动与卡片点击。 */
+  pointer-events: none;
+}
+.zoombar__btn, .zoombar__track { pointer-events: auto; }
+
+.zoombar__btn {
+  appearance: none;
+  width: 30px; height: 30px;
+  display: grid; place-items: center;
+  border: none; border-radius: 999px;
+  background: var(--card); color: var(--ink);
+  font-family: var(--mono); font-size: 14px; line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.zoombar__btn:hover { background: #000; transform: scale(1.06); }
+.zoombar__btn:active { transform: scale(0.96); }
+
+.zoombar__btn--val {
+  width: auto; min-width: 46px; height: 26px; padding: 0 8px;
+  border-radius: 6px;
+  font-size: 10px; letter-spacing: 0.04em;
+  background: #141414; color: var(--dim);
+}
+.zoombar__btn--val:hover { background: #1c1c1c; color: var(--ink); transform: none; }
+
+/* 滑轨：宽 22px 的点击热区，内部只有 2px 的可见细线 */
+.zoombar__track {
+  position: relative;
+  width: 22px;
+  height: 168px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+.zoombar__rail {
+  position: absolute; left: 10px; top: 0; bottom: 0; width: 2px;
+  background: rgba(0, 0, 0, 0.32);
+}
+.zoombar__fill {
+  position: absolute; left: 10px; bottom: 0; width: 2px;
+  background: var(--card);
+}
+.zoombar__knob {
+  position: absolute; left: 50%; bottom: 25%;
+  width: 14px; height: 14px;
+  margin-left: -7px; margin-bottom: -7px;
+  border-radius: 3px;                     /* 方块，与全站的直角语言一致 */
+  background: var(--card);
+  border: 2px solid var(--page);
+  box-shadow: 0 0 0 1px var(--card);
+  transition: transform 0.12s ease;
+}
+.zoombar__track:hover .zoombar__knob,
+.zoombar__track.is-dragging .zoombar__knob { transform: scale(1.18); }
+
+.zoombar__tick {
+  position: absolute; right: 100%; margin-right: 6px;
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.04em;
+  color: rgba(0, 0, 0, 0.45);
+  transform: translateY(50%);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* 画布缩放：只缩放画布内容，不放缩尺寸基准 */
+.canvas { transform: scale(var(--zoom, 1)); transform-origin: top left; }
+
+/* 窄屏（手机/平板）隐藏缩放条：触摸屏上意义不大，还占地方 */
+@media (max-width: 900px) { .zoombar { display: none; } }
+/* 键盘可达性：拖不动的人也能用方向键调 */
+.zoombar__track:focus-visible { outline: 2px solid var(--card); outline-offset: 4px; border-radius: 6px; }

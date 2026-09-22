@@ -36,6 +36,34 @@
      原先球面用 1000+z 给卡片排序，前排卡片能到 1400，直接盖住了 z-index 1001 的侧栏。 */
   const Z_CARD_MIN = 10, Z_CARD_SPAN = 400;
 
+  /* 画布缩放：0.5 ~ 2.0，存在本机，刷新后保留。
+     拖动手势的位移要除以缩放比，否则放大后拖动会"跑得比手快"。 */
+  const zoom = {
+    value: 1,
+    MIN: 0.5, MAX: 2,
+    key: (window.CAMPUS_DATA.storageKey) + ':zoom',
+    read() {
+      try { const v = parseFloat(localStorage.getItem(this.key)); return (v >= this.MIN && v <= this.MAX) ? v : 1; }
+      catch { return 1; }
+    },
+    write(v) { try { localStorage.setItem(this.key, String(v)); } catch { /* 忽略 */ } },
+    apply(v) {
+      this.value = Math.max(this.MIN, Math.min(this.MAX, v));
+      canvasEl.style.setProperty('--zoom', this.value);
+      const pct = Math.round(this.value * 100);
+      const knob = document.getElementById('zoomKnob');
+      const fill = document.getElementById('zoomFill');
+      const track = document.getElementById('zoomTrack');
+      const val = document.getElementById('zoomVal');
+      if (knob) knob.style.bottom = ((this.value - this.MIN) / (this.MAX - this.MIN)) * 100 + '%';
+      if (fill) fill.style.height = ((this.value - this.MIN) / (this.MAX - this.MIN)) * 100 + '%';
+      if (track) track.setAttribute('aria-valuenow', String(pct));
+      if (val) val.textContent = pct + '%';
+      this.write(this.value);
+      return this.value;
+    }
+  };
+
   const REF = '2026-09-19 14:00';
   const esc = (v) => String(v === null || v === undefined ? '' : v).replace(
     /[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -855,8 +883,10 @@
 
   stageEl.addEventListener('pointermove', (e) => {
     if (!gesture) return;
-    const dx = e.clientX - gesture.x;
-    const dy = e.clientY - (gesture.y || 0);
+    // 必须是 let：下面要按缩放比折算位移（dx /= z），const 会抛
+    // "Assignment to constant variable"，整个拖动分支直接失效
+    let dx = e.clientX - gesture.x;
+    let dy = e.clientY - (gesture.y || 0);
     if (!gesture.moved) {
       if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
       gesture.moved = true;
@@ -864,6 +894,10 @@
       stageEl.style.cursor = 'grabbing';
       if (gesture.kind === 'globe') setSphereTransition(true);
     }
+    /* 画布整体被 scale 过，所以手势位移要除以缩放比：
+       否则放大到 200% 时拖动会比手指快一倍，缩到 50% 时会跟不上。 */
+    const z = zoom.value || 1;
+    dx /= z; dy /= z;
     if (gesture.kind === 'globe') {
       globe.yaw = gesture.yaw + dx * 0.005;
       globe.pitch = Math.max(-0.85, Math.min(0.85, gesture.pitch - dy * 0.004));
@@ -892,7 +926,66 @@
   };
   stageEl.addEventListener('pointerup', endGesture);
   stageEl.addEventListener('pointercancel', endGesture);
-  stageEl.addEventListener('pointerleave', endGesture);
+  /* 刻意不监听 pointerleave：指针从 canvas 移到卡片上（或移到缩放条）都会触发它，
+     一触发就把手势清空，拖动立刻中断 —— 表现为"拖不动"。
+     结束手势只认 pointerup / pointercancel。 */
+  window.addEventListener('blur', endGesture);
+
+  /* ---------------- 右侧缩放条 ---------------- */
+  (function zoomBar() {
+    const track = document.getElementById('zoomTrack');
+    if (!track) return;
+    let dragging = false;
+
+    const fromEvent = (e) => {
+      const r = track.getBoundingClientRect();
+      const t = 1 - (e.clientY - r.top) / r.height;      // 上 → 大
+      return zoom.MIN + Math.max(0, Math.min(1, t)) * (zoom.MAX - zoom.MIN);
+    };
+    const onMove = (e) => { if (dragging) zoom.apply(fromEvent(e)); };
+
+    track.addEventListener('pointerdown', (e) => {
+      dragging = true;
+      track.classList.add('is-dragging');
+      track.setPointerCapture(e.pointerId);             // 这里捕获是必要的：要拖出条外仍跟手
+      zoom.apply(fromEvent(e));
+      e.preventDefault();
+    });
+    track.addEventListener('pointermove', onMove);
+    const stop = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      track.classList.remove('is-dragging');
+      try { track.releasePointerCapture(e.pointerId); } catch { /* 忽略 */ }
+    };
+    track.addEventListener('pointerup', stop);
+    track.addEventListener('pointercancel', stop);
+
+    track.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 0.25 : 0.1;
+      if (e.key === 'ArrowUp' || e.key === 'ArrowRight') { zoom.apply(zoom.value + step); e.preventDefault(); }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') { zoom.apply(zoom.value - step); e.preventDefault(); }
+      if (e.key === 'Home') { zoom.apply(1); e.preventDefault(); }
+    });
+
+    document.getElementById('zoombar').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-zoom]');
+      if (!b) return;
+      const k = b.getAttribute('data-zoom');
+      if (k === 'in') zoom.apply(zoom.value + 0.1);
+      else if (k === 'out') zoom.apply(zoom.value - 0.1);
+      else zoom.apply(1);
+    });
+
+    // Ctrl/⌘ + 滚轮：以画布中心为基准缩放（不改变布局，只改比例）
+    stageEl.addEventListener('wheel', (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      zoom.apply(zoom.value - e.deltaY * 0.002);
+    }, { passive: false });
+
+    zoom.apply(zoom.read());
+  })();
 
   /* 球面上滚轮缩放半径 */
   stageEl.addEventListener('wheel', (e) => {
@@ -1061,6 +1154,8 @@
     if (e.key === 'Escape') { closePanel(); return; }
     if (typing) return;
     if (e.key === '/') { const q = document.getElementById('q'); if (q) { e.preventDefault(); q.focus(); q.select(); } return; }
+    if (e.key === '+' || e.key === '=') { zoom.apply(zoom.value + 0.1); return; }
+    if (e.key === '-' || e.key === '_') { zoom.apply(zoom.value - 0.1); return; }
     const keys = { '1': 'globe', '2': 'scatter', '3': 'grid', '4': 'timeline' };
     if (keys[e.key]) {
       const b = modesEl.querySelector('[data-mode="' + keys[e.key] + '"]');
@@ -1107,7 +1202,8 @@
 
   window.__App = {
     state, layout, openDetail, openMine, openPublish, openGate, closePanel, filtered, nodes,
-    globe, tl, setSphereTransition, layoutGlobeOnly, layoutTimelineOnly,
+    globe, tl, zoom, setSphereTransition,
+    getGesture: () => gesture, layoutGlobeOnly, layoutTimelineOnly,
     get settled() { return settled; }
   };
 })();

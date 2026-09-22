@@ -128,6 +128,10 @@ async function main() {
   };
   const dragFrom = async (x0, y0, x1, y1) => {
     await mouseUp(x0, y0);
+    const top = await ev("(function(){var e=document.elementFromPoint(" + x0 + "," + y0 + ");return e?(e.className||e.tagName):'null'})()");
+    if (String(top.value).indexOf('zoombar') >= 0) {
+      throw new Error('拖动起点落在缩放条上：(' + x0 + ',' + y0 + ') —— 说明控件挡住了画布');
+    }
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: x0, y: y0, button: 'left', buttons: 1, clickCount: 1 }, S);
     await sleep(90);
     await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: Math.round((x0 + x1) / 2), y: Math.round((y0 + y1) / 2), button: 'left', buttons: 1 }, S);
@@ -229,6 +233,76 @@ console.log('被测：' + URL_UNDER_TEST + '\n');
   await ev("(function(){window.__App.globe.autoSpin=true;window.__App.globe.vYaw=0.00021;return 'ok'})()");
   await sleep(400);
   await shot('00-sphere');
+
+  /* ---------- 2.6 右侧缩放条（桌面端） ---------- */
+  const zb = await ev(`(function(){
+    var bar=document.getElementById('zoombar');
+    if(!bar) return { missing:true };
+    var r=bar.getBoundingClientRect();
+    var track=document.getElementById('zoomTrack').getBoundingClientRect();
+    return {
+      missing:false,
+      rightGap: Math.round(window.innerWidth - r.right),
+      trackW: Math.round(track.width), trackH: Math.round(track.height),
+      val: document.getElementById('zoomVal').textContent,
+      trackX: Math.round(track.left + track.width/2),
+      trackTop: Math.round(track.top), trackBottom: Math.round(track.bottom)
+    };
+  })()`);
+  const ZB = zb.value || {};
+  check('右侧有缩放条且贴住窗口右边', ZB.missing === false && Number(ZB.rightGap) <= 20,
+    '距右边缘 ' + ZB.rightGap + 'px');
+  check('缩放条是竖排滑轨', Number(ZB.trackH) > Number(ZB.trackW) * 3, ZB.trackW + 'x' + ZB.trackH);
+  check('缩放条初始为 100%', String(ZB.val) === '100%', String(ZB.val));
+
+  // 拖动滑轨：从下端拖到上端，比例应变大且画布真的被缩放
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: ZB.trackX, y: ZB.trackBottom - 10, button: 'left', buttons: 1, clickCount: 1 }, S);
+  await sleep(80);
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: ZB.trackX, y: ZB.trackTop + 20, button: 'left', buttons: 1 }, S);
+  await sleep(150);
+  const zhi = await ev("(function(){return {val:document.getElementById('zoomVal').textContent, tr:getComputedStyle(document.getElementById('canvas')).transform}})()");
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: ZB.trackX, y: ZB.trackTop + 20, button: 'left', buttons: 0, clickCount: 1 }, S);
+  const HIP = parseFloat(String(zhi.value.val)) ;
+  check('拖动滑轨可放大画布', HIP > 150 && /matrix\(1\.[5-9]/.test(String(zhi.value.tr)),
+    String(zhi.value.val) + ' · ' + String(zhi.value.tr).slice(0, 26));
+  await shot('08-zoom-in');
+
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: ZB.trackX, y: ZB.trackTop + 20, button: 'left', buttons: 1, clickCount: 1 }, S);
+  await sleep(80);
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: ZB.trackX, y: ZB.trackBottom - 6, button: 'left', buttons: 1 }, S);
+  await sleep(150);
+  const zlo = await ev("document.getElementById('zoomVal').textContent");
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: ZB.trackX, y: ZB.trackBottom - 6, button: 'left', buttons: 0, clickCount: 1 }, S);
+  check('拖动滑轨可缩小画布', parseFloat(String(zlo.value)) < 70, String(zlo.value));
+
+  await ev("(function(){document.querySelector('[data-zoom=reset]').click();return 'ok'})()");
+  await sleep(300);
+  check('点比例框可复位到 100%', String((await ev("document.getElementById('zoomVal').textContent")).value) === '100%');
+
+  // 缩放后手势位移要跟着折算（否则放大后拖动会跑得比手快）
+  await ev("(function(){window.__App.zoom.apply(2);return 'ok'})()");
+  await sleep(200);
+  /* 缩放折算：同样拖 200px，Δyaw 应随缩放比成反比。
+     用页面内派发的 PointerEvent 测量 —— CDP 的鼠标事件位移不可控，
+     用它测得的位移会带上额外分量，测不准。 */
+  const measureDrag = async (zoomVal) => (await ev('(function(){' +
+    'var g=window.__App.globe; g.autoSpin=false; g.vYaw=0; g.vPitch=0; g.yaw=0; g.pitch=0;' +
+    'window.__App.zoom.apply(' + zoomVal + ');' + 
+    'var st=document.getElementById(\'stage\'); var y0=g.yaw;' +
+    'st.dispatchEvent(new PointerEvent(\'pointerdown\',{clientX:600,clientY:400,bubbles:true,cancelable:true,pointerId:1,pointerType:\'mouse\',button:0,buttons:1}));' +
+    'st.dispatchEvent(new PointerEvent(\'pointermove\',{clientX:700,clientY:400,bubbles:true,cancelable:true,pointerId:1,pointerType:\'mouse\',button:0,buttons:1}));' +
+    'st.dispatchEvent(new PointerEvent(\'pointermove\',{clientX:800,clientY:400,bubbles:true,cancelable:true,pointerId:1,pointerType:\'mouse\',button:0,buttons:1}));' +
+    'var y1=g.yaw;' +
+    'st.dispatchEvent(new PointerEvent(\'pointerup\',{clientX:800,clientY:400,bubbles:true,cancelable:true,pointerId:1,pointerType:\'mouse\',button:0,buttons:0}));' +
+    'return +(y1-y0).toFixed(3); })()')).value;
+  const dAt1 = await measureDrag(1);
+  await sleep(250);
+  const dAt2 = await measureDrag(2);
+  check('放大后拖动位移按缩放折算（Δyaw ÷2）',
+    Math.abs(dAt1 - 1.0) < 0.06 && Math.abs(dAt2 - 0.5) < 0.06,
+    'zoom=1 → Δ' + dAt1 + '；zoom=2 → Δ' + dAt2 + '（未折算会是 1.0）');
+  await ev("(function(){window.__App.zoom.apply(1);return 'ok'})()");
+  await sleep(250);
 
   /* ---------- 3. 散落态：铺开且不重叠（用旋转后的 OBB 判断） ---------- */
   await mode('scatter');
@@ -476,13 +550,7 @@ console.log('被测：' + URL_UNDER_TEST + '\n');
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true }, S);
   await send('Page.reload', {}, S);
   await sleep(1200); await waitSettled();
-  const mob = await ev(`(function(){
-    var ns=[]; window.__App.nodes.forEach(function(n){ ns.push(n) });
-    var stage=document.getElementById('stage').clientWidth;
-    var pad = 6;
-    var tooWide = ns.filter(function(n){ return n.x < -pad || n.x + n.finalW*n.scale > stage + pad }).length;
-    return { n:ns.length, tooWide:tooWide, mode:document.getElementById('canvas').dataset.mode };
-  })()`);
+  const mob = await ev("(function(){var ns=Array.from(window.__App.nodes.values());var stage=document.getElementById('stage').clientWidth;return {n:ns.length,tooWide:ns.filter(function(n){return n.x < -6 || n.x + n.finalW*n.scale > stage + 6}).length,mode:document.getElementById('canvas').dataset.mode}})()");
   check('移动端散落不超出画布', Number((mob.value || {}).tooWide) === 0, (mob.value || {}).tooWide + ' 张越界');
   check('移动端页面无横向滚动', Number((await ev("document.documentElement.scrollWidth - document.documentElement.clientWidth")).value) <= 2,
     (await ev("document.documentElement.scrollWidth - document.documentElement.clientWidth")).value + 'px');
