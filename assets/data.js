@@ -42,7 +42,7 @@ window.CAMPUS_DATA = {
   productName: '校园雷达',
   tagline: '新生优先的校园机会导航台',
   storageKey: 'campus-radar-v2',
-  build: '09-22 20:32',   // 构建标记：用来一眼确认页面（或缓存）里跑的是哪一版
+  build: '09-22 20:47',   // 构建标记：用来一眼确认页面（或缓存）里跑的是哪一版
 
   author: '应试作品',
 

@@ -440,3 +440,15 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .mode { flex: none; }
   .strip { padding: 0 6px; }
 }
+
+/* ========================== 时间轴（可拖动时间条） ========================== */
+.canvas[data-mode="timeline"] { cursor: grab; }
+.canvas[data-mode="timeline"]:active { cursor: grabbing; }
+.canvas[data-mode="timeline"] .card { cursor: pointer; }
+.canvas[data-mode="timeline"] .card__title { font-size: 12px; -webkit-line-clamp: 3; }
+.canvas[data-mode="timeline"] .tl-rail { background: rgba(0,0,0,0.45); }
+.canvas[data-mode="timeline"] .tl-label { top: 30px; }
+.tl-rail-wrap { will-change: transform; }
+.canvas[data-mode="timeline"] .card { transition: transform .18s cubic-bezier(.16,1,.3,1), opacity .3s ease; }
+/* 拖动期间：卡片不响应指针，避免拖动结束时误触发打开 */
+.canvas.is-panning .card { pointer-events: none; }

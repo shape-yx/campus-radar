@@ -99,7 +99,47 @@ async function main() {
     await waitSettled();
   };
 
-  console.log('被测：' + URL_UNDER_TEST + '\n');
+    /* CDP 的鼠标状态跨调用持续：一次按住没释放，后面的 mousePressed 会被静默忽略。
+     之前拖动/点击断言时好时坏就是这个原因。统一走这两个辅助函数。 */
+  /* 面板打开时遮罩盖住全屏，任何鼠标事件都会落在遮罩上并关掉面板。
+     所以发鼠标事件前先确保面板是关的，避免"上一步留下的面板"干扰下一步。 */
+  const ensureNoPanel = async () => {
+    const open = await ev("String(!document.getElementById('panel').hidden)");
+    if (open.value === 'true') {
+      await ev("(function(){window.__App.closePanel();return 'ok'})()");
+      await sleep(250);
+    }
+  };
+  const mouseUp = async (x, y) => {
+    await ensureNoPanel();
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x || 700, y: y || 450, button: 'left', buttons: 0, clickCount: 1 }, S);
+    await sleep(60);
+  };
+  /* 一次拖动之后，产品会吞掉紧随其后的 click（本该如此）。
+     测试里如果紧接着要点卡片，就先派发一次空的按下/抬起，
+     把"刚拖过"这个状态消费掉，再点。 */
+  const settleAfterDrag = async () => {
+    await mouseUp(700, 450);
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 700, y: 450, button: 'left', buttons: 1, clickCount: 1 }, S);
+    await sleep(50);
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 700, y: 450, button: 'left', buttons: 0, clickCount: 1 }, S);
+    await sleep(80);
+    await mouseUp(700, 450);
+  };
+  const dragFrom = async (x0, y0, x1, y1) => {
+    await mouseUp(x0, y0);
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: x0, y: y0, button: 'left', buttons: 1, clickCount: 1 }, S);
+    await sleep(90);
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: Math.round((x0 + x1) / 2), y: Math.round((y0 + y1) / 2), button: 'left', buttons: 1 }, S);
+    await sleep(90);
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x1, y: y1, button: 'left', buttons: 1 }, S);
+    await sleep(90);
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x1, y: y1, button: 'left', buttons: 0, clickCount: 1 }, S);
+    await sleep(250);
+    await mouseUp(x1, y1);
+  };
+
+console.log('被测：' + URL_UNDER_TEST + '\n');
   await send('Page.navigate', { url: URL_UNDER_TEST }, S);
   await sleep(1500);
   await waitSettled();
@@ -253,8 +293,52 @@ async function main() {
   check('时间轴：刻度带日期标签', String(tlLabels.value).length > 6, String(tlLabels.value).slice(0, 40));
   await shot('03-timeline');
 
+  /* 时间轴：可拖动 + 卡片不重叠 + 刻度跟着走 */
+  const tlBefore = await ev(`(function(){
+    var ns=[]; window.__App.nodes.forEach(function(n){ ns.push(n) });
+    function corners(o){
+      var rad=(o.r||0)*Math.PI/180, c=Math.cos(rad), s=Math.sin(rad);
+      var w=o.finalW*o.scale, h=o.finalH*o.scale;
+      return [[0,0],[w,0],[w,h],[0,h]].map(function(p){ return [o.x+p[0]*c-p[1]*s, o.y+p[0]*s+p[1]*c] });
+    }
+    function axes(c){ return [[c[1][0]-c[0][0],c[1][1]-c[0][1]],[c[3][0]-c[0][0],c[3][1]-c[0][1]]]; }
+    function proj(c,a){ var v=c.map(function(p){return p[0]*a[0]+p[1]*a[1]}); return [Math.min.apply(null,v),Math.max.apply(null,v)]; }
+    function hit(a,b){
+      var ca=corners(a), cb=corners(b), ax=axes(ca).concat(axes(cb));
+      for(var i=0;i<ax.length;i++){ var pa=proj(ca,ax[i]), pb=proj(cb,ax[i]); if(pa[1]<pb[0]+1||pb[1]<pa[0]+1) return false; }
+      return true;
+    }
+    var bad=0;
+    for(var i=0;i<ns.length;i++)for(var j=i+1;j<ns.length;j++) if(hit(ns[i],ns[j])) bad++;
+    var over=ns.filter(function(n){ return n.x < -4 || n.y < -4 || n.y + n.finalH*n.scale > 706 }).length;
+    return { bad:bad, over:over, offset:window.__App.tl.offset, trackLeft:document.querySelector('.tl-rail-wrap').style.left };
+  })()`);
+  const TLB = tlBefore.value || {};
+  check('时间轴：卡片互不重叠', Number(TLB.bad) === 0, TLB.bad + ' 对重叠');
+  check('时间轴：卡片纵向不出画布', Number(TLB.over) === 0, TLB.over + ' 张越界');
+
+  // 拖动时间轴：卡片与日期刻度必须一起平移
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 900, y: 420, button: 'left', buttons: 0, clickCount: 1 }, S);
+  await dragFrom(900, 420, 260, 420);
+  await sleep(500);
+  const tlAfter = await ev(`(function(){
+    var xs=[]; window.__App.nodes.forEach(function(n){ xs.push(n.x) });
+    return { offset:window.__App.tl.offset, minX:Math.round(Math.min.apply(null,xs)),
+             trackLeft:document.querySelector('.tl-rail-wrap').style.left,
+             panel:!document.getElementById('panel').hidden };
+  })()`);
+  const TLA = tlAfter.value || {};
+  check('时间轴：拖动可平移时间线', Math.abs(TLA.offset - TLB.offset) > 200,
+    'offset ' + Math.round(TLB.offset) + ' → ' + Math.round(TLA.offset));
+  check('时间轴：日期刻度跟着一起平移', String(TLA.trackLeft) !== String(TLB.trackLeft) && parseFloat(TLA.trackLeft) < 0,
+    '轨道 left ' + TLB.trackLeft + ' → ' + TLA.trackLeft);
+  check('时间轴：拖动不会误开详情面板', TLA.panel === false, 'panel open=' + TLA.panel);
+  await shot('03b-timeline-dragged');
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 260, y: 420, button: 'left', buttons: 0, clickCount: 1 }, S);
+
   /* ---------- 6. 详情侧栏 ---------- */
   await mode('scatter');
+  await settleAfterDrag();
   await ev("(function(){document.querySelector('.card').click();return 'ok';})()");
   await sleep(700);
   const panelOpen = await ev("!document.getElementById('panel').hidden");

@@ -166,7 +166,10 @@
         el.className = 'card';
         el.dataset.id = it.id;
         el.innerHTML = cardHTML(it, i);
-        el.addEventListener('click', () => openDetail(it.id));
+        el.addEventListener('click', (ev) => {
+          if (suppressClick) { ev.preventDefault(); ev.stopPropagation(); return; }
+          openDetail(it.id);
+        });
         canvasEl.appendChild(el);
         n = { el, it, x: 0, y: 0, w: 0, h: 0, a: 0 };
         n.el.querySelector('.card__no').textContent = idx(i + 1);
@@ -351,31 +354,75 @@
     return out;
   }
 
-  /* ---------------- 布局：时间轴（按截止日横排） ---------------- */
+  /* ---------------- 布局：时间轴（可拖动的横向时间条） ----------------
+     沿用参考站的做法：卡片沿一条水平时间线排开，靠"每一天占多少像素"拉开距离，
+     日期刻度跟着平移。视口装不下时整体可以拖动 —— 这就是"时间轴可拖动"的含义：
+     拖的是时间，不是把卡片拖乱。
+
+     · 位置 = 24 + (该条截止日 + 拖动偏移) × pxPerDay
+     · 刻度按固定间隔（每 3 天一根）画在时间线上，随偏移一起移动
+     · 纵向：全部对齐同一条线，超出视口的靠拖动看，不再堆成十几行
+   ------------------------------------------------------------ */
+  const tl = { offset: 0, pxPerDay: 26, dragging: false, lastX: 0, minX: 0, maxX: 0 };
+
   function layoutTimeline(list) {
     const W = stageEl.clientWidth, H = stageEl.clientHeight;
     const now = clock.value();
     const withD = list.filter((it) => it.deadline && it.deadline.ms > 0)
       .sort((a, b) => a.deadline.ms - b.deadline.ms);
     const noD = list.filter((it) => !(it.deadline && it.deadline.ms > 0));
-    const maxD = withD.length ? Math.max.apply(null, withD.map((it) => Math.min(it.deadline.days, 30))) : 1;
-    const colW = Math.max(150, Math.min(230, (W - 60) / Math.max(1, Math.min(withD.length, 8))));
+
+    const baseY = 74;
     const out = [];
-    const lanes = [0, 0, 0, 0, 0];
-    withD.forEach((it) => {
+
+    // 时间线总长：按最远的截止日决定，但至少一个视口宽，最多 3 个视口宽
+    const maxDay = withD.length ? Math.max.apply(null, withD.map((it) => Math.min(it.deadline.days, 60))) : 30;
+    /* 内容宽 = 时间线所需的宽度；若它比视口窄，也补到 1.6 个视口宽，
+       这样"可拖动"始终成立（内容刚好塞满时没有可拖的余地，用户会以为拖动坏了）。 */
+    const railW = 24 + maxDay * tl.pxPerDay + 260;
+    const contentW = Math.max(Math.round(W * 1.6), railW);
+    const minOffset = Math.min(0, W - contentW);   // 可以往左拖到的极限
+    tl.minX = minOffset; tl.maxX = 0;
+    tl.offset = Math.max(tl.minX, Math.min(tl.maxX, tl.offset));
+
+    /* 摆放规则：
+       1. 先按"截止日 × 每天像素"给一个理想 x —— 时间顺序决定横向位置
+       2. 按时间先后依次落位；与已落位的卡片相交就右推，推到不重叠为止
+       3. 两行纵向错开，并用伪随机倾斜一点，避免看起来像表格
+       这样"拖动的仍然是时间"，同时卡片不会叠成一坨。 */
+    const pad = 10;
+    const placed = [];
+    const hits = (x, y, w, h) => placed.some((p2) =>
+      x < p2.x + p2.w + pad && x + w + pad > p2.x &&
+      y < p2.y + p2.h + pad && y + h + pad > p2.y);
+
+    withD.forEach((it, i) => {
       const n = nodes.get(it.id);
-      const day = Math.min(it.deadline.days, 30);
-      const x = Math.min(W - n.tw - 8, 24 + (day / Math.max(1, maxD)) * (W - colW - 40));
-      let lane = 0, best = Infinity;
-      for (let l = 0; l < lanes.length; l += 1) if (lanes[l] < best) { best = lanes[l]; lane = l; }
-      const y = 46 + lane * (n.th + 12);
-      lanes[lane] = y + n.th + 12;
-      out.push({ n, x, y, r: 0 });
+      const day = Math.min(it.deadline.days, 60);
+      const w = n.tw * n.ts, h = n.th * n.ts;
+      const row = i % 2;
+      const y = baseY + row * (h + 14);
+      let x = 24 + day * tl.pxPerDay + tl.offset;
+      let guard = 0;
+      while (hits(x, y, w, h) && guard < 60) { x += 18; guard += 1; }
+      placed.push({ x, y, w, h });
+      out.push({ n, x, y, r: (i % 2 ? 1.6 : -1.6), tlDay: day });
     });
+
+    // 没有截止日的：接在时间线右侧之后，同样按冲突右推
+    const tailX = 24 + (maxDay + 3) * tl.pxPerDay + tl.offset;
     noD.forEach((it, i) => {
       const n = nodes.get(it.id);
-      out.push({ n, x: 24 + (i % 4) * (n.tw + 12), y: Math.max.apply(null, lanes) + 74 + Math.floor(i / 4) * (n.th + 12), r: 0 });
+      const w = n.tw * n.ts, h = n.th * n.ts;
+      const row = i % 2;
+      const y = baseY + (2 + row) * (h + 14);
+      let x = tailX + Math.floor(i / 2) * (w + pad);
+      let guard = 0;
+      while (hits(x, y, w, h) && guard < 60) { x += 18; guard += 1; }
+      placed.push({ x, y, w, h });
+      out.push({ n, x, y, r: (i % 2 ? 1.6 : -1.6), tlDay: null });
     });
+
     return out;
   }
 
@@ -447,27 +494,44 @@
 
   /* 时间轴模式的刻度与日期标签 */
   function drawRules() {
-    canvasEl.querySelectorAll('.tl-rule, .tl-tick, .tl-label').forEach((e) => e.remove());
+    /* 清掉上一次的整条轨道 —— 包括容器本身。
+       只删里面的刻度和线是不够的：容器会一层层叠起来，
+       而 querySelector 取到的永远是最早那个（位置停留在第一次绘制时的偏移）。 */
+    canvasEl.querySelectorAll('.tl-rail-wrap, .tl-rule, .tl-tick, .tl-label').forEach((e) => e.remove());
     if (state.mode !== 'timeline') return;
-    const W = stageEl.clientWidth, H = canvasEl.clientHeight;
-    const rule = document.createElement('div');
-    rule.className = 'tl-rule';
-    rule.style.top = '34px';
-    canvasEl.appendChild(rule);
+    const W = stageEl.clientWidth;
     const now = clock.value();
     const rows = filtered().filter((it) => it.deadline && it.deadline.ms > 0);
-    const maxD = rows.length ? Math.max.apply(null, rows.map((it) => Math.min(it.deadline.days, 30))) : 1;
-    [0, 0.25, 0.5, 0.75, 1].forEach((f) => {
-      const d = Math.round(maxD * f);
-      const x = 24 + f * (W - 200);
+    const maxDay = rows.length ? Math.max.apply(null, rows.map((it) => Math.min(it.deadline.days, 60))) : 30;
+    const railW = 24 + maxDay * tl.pxPerDay + 260;
+    const contentW = Math.max(Math.round(W * 1.6), railW);
+
+    canvasEl.style.width = contentW + 'px';
+    // 刻度容器与时间线一起平移：这样拖动时刻度自然跟着走，不用逐个重算
+    const rail = document.createElement('div');
+    rail.className = 'tl-rail-wrap';
+    rail.style.cssText = 'position:absolute;left:' + Math.round(tl.offset) + 'px;top:0;bottom:0;width:' + railW + 'px;pointer-events:none;';
+
+    const rule = document.createElement('div');
+    rule.className = 'tl-rule';
+    rule.style.top = '58px';
+    rail.appendChild(rule);
+
+    for (let day = 0; day <= maxDay; day += 3) {
+      const x = 24 + day * tl.pxPerDay;
       const tick = document.createElement('div');
-      tick.className = 'tl-tick'; tick.style.left = x + 'px';
-      canvasEl.appendChild(tick);
+      tick.className = 'tl-tick';
+      tick.style.left = x + 'px';
+      rail.appendChild(tick);
+      const d = new Date(now.getTime() + day * 86400000);
       const lab = document.createElement('div');
-      lab.className = 'tl-label'; lab.style.left = x + 'px';
-      lab.innerHTML = '<b>' + (d === 0 ? '今天' : Radar.fmtDay(new Date(now.getTime() + d * 86400000))) + '</b><span>' + (d === 0 ? '' : d + ' 天后') + '</span>';
-      canvasEl.appendChild(lab);
-    });
+      lab.className = 'tl-label';
+      lab.style.left = x + 'px';
+      lab.innerHTML = '<b>' + (day === 0 ? '今天' : (d.getMonth() + 1) + '/' + d.getDate()) + '</b>' +
+        (day ? '<span>' + day + ' 天后</span>' : '');
+      rail.appendChild(lab);
+    }
+    canvasEl.appendChild(rail);
   }
 
   /* ---------------- 筛选条 ---------------- */
@@ -720,6 +784,18 @@
     rafId = requestAnimationFrame(spinLoop);
   }
 
+  /* 只重排时间轴（拖动时用），并把刻度一起更新 */
+  function layoutTimelineOnly() {
+    const placed = layoutTimeline(filtered());
+    placed.forEach((p) => {
+      const n = p.n, el = n.el;
+      el.style.setProperty('--x', Math.round(p.x));
+      el.style.setProperty('--y', Math.round(p.y));
+      n.x = p.x; n.y = p.y;
+    });
+    drawRules();
+  }
+
   /* 只重排球面：跳过 DOM 同步，保证每帧都够快 */
   function layoutGlobeOnly() {
     const rows = filtered();
@@ -750,36 +826,73 @@
     });
   }
 
-  let drag = null;
+  /* 时间轴拖动：横向平移时间线（拖的是时间，不是把卡片拖乱） */
+  /* ---------------- 指针手势：一套状态机处理三种意图 ----------------
+     意图判断只看位移：
+       · 位移 < 6px       → 点击（交给卡片的 click 处理，打开详情）
+       · 球面 + 水平拖动   → 旋转球体（yaw / pitch）
+       · 时间轴 + 水平拖动 → 平移时间线（offset）
+     刻意不用 setPointerCapture：
+       捕获会把"指针底下是谁"改成捕获元素，导致 click 不再派发给卡片、
+       连轻点卡片都被算成拖动吞掉。stage 已覆盖整个画布，不需要捕获。
+     ------------------------------------------------------------------ */
+  const DRAG_THRESHOLD = 6;
+  let gesture = null;        // { kind:'globe'|'timeline', x, y, moved, base... }
+  let suppressClick = false; // 刚结束一次拖动时，吞掉紧随其后的 click
+
   stageEl.addEventListener('pointerdown', (e) => {
-    if (state.mode !== 'globe') return;
-    if (e.target.closest('.card')) return;
-    globe.dragging = true;
-    drag = { x: e.clientX, y: e.clientY, yaw: globe.yaw, pitch: globe.pitch };
-    stageEl.setPointerCapture(e.pointerId);
-    stageEl.style.cursor = 'grabbing';
-    setSphereTransition(true);
+    suppressClick = false;
+    if (state.mode === 'globe') {
+      gesture = { kind: 'globe', x: e.clientX, y: e.clientY, moved: false,
+        yaw: globe.yaw, pitch: globe.pitch };
+      globe.dragging = true;
+    } else if (state.mode === 'timeline') {
+      gesture = { kind: 'timeline', x: e.clientX, moved: false, offset: tl.offset };
+    } else {
+      gesture = null;
+    }
   });
+
   stageEl.addEventListener('pointermove', (e) => {
-    if (!globe.dragging || !drag) return;
-    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-    globe.yaw = drag.yaw + dx * 0.005;
-    globe.pitch = Math.max(-0.85, Math.min(0.85, drag.pitch - dy * 0.004));
-    /* 惯性速度必须限幅：松手后靠它继续滑行，不限幅会越转越快
-       （实测松开时 vYaw 会飙到 0.04 量级，一秒转好几圈）。
-       上限 0.0016 rad/ms ≈ 1.6 rad/s，约 4 秒一圈，滑行手感正常。 */
-    const MAXV = 0.0016;
-    globe.vYaw = Math.max(-MAXV, Math.min(MAXV, dx * 0.00013));
-    globe.vPitch = Math.max(-MAXV / 2, Math.min(MAXV / 2, -dy * 0.00008));
+    if (!gesture) return;
+    const dx = e.clientX - gesture.x;
+    const dy = e.clientY - (gesture.y || 0);
+    if (!gesture.moved) {
+      if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+      gesture.moved = true;
+      canvasEl.classList.add('is-panning');   // 拖动期间卡片不响应指针
+      stageEl.style.cursor = 'grabbing';
+      if (gesture.kind === 'globe') setSphereTransition(true);
+    }
+    if (gesture.kind === 'globe') {
+      globe.yaw = gesture.yaw + dx * 0.005;
+      globe.pitch = Math.max(-0.85, Math.min(0.85, gesture.pitch - dy * 0.004));
+      const MAXV = 0.0016;                    // 惯性限幅，否则松手后越转越快
+      globe.vYaw = Math.max(-MAXV, Math.min(MAXV, dx * 0.00013));
+      globe.vPitch = Math.max(-MAXV / 2, Math.min(MAXV / 2, -dy * 0.00008));
+      layoutGlobeOnly();
+    } else {
+      tl.offset = Math.max(tl.minX, Math.min(tl.maxX, gesture.offset + dx));
+      layoutTimelineOnly();
+    }
   });
-  const endDrag = (e) => {
-    if (!globe.dragging) return;
-    globe.dragging = false; drag = null;
+
+  const endGesture = () => {
+    if (!gesture) return;
+    const moved = gesture.moved;
+    const kind = gesture.kind;
+    gesture = null;
+    if (kind === 'globe') {
+      globe.dragging = false;
+      setSphereTransition(false);
+    }
+    canvasEl.classList.remove('is-panning');
     stageEl.style.cursor = '';
-    try { stageEl.releasePointerCapture(e.pointerId); } catch { /* 忽略 */ }
+    if (moved) suppressClick = true;          // 这一次算拖动，不要打开详情
   };
-  stageEl.addEventListener('pointerup', endDrag);
-  stageEl.addEventListener('pointercancel', endDrag);
+  stageEl.addEventListener('pointerup', endGesture);
+  stageEl.addEventListener('pointercancel', endGesture);
+  stageEl.addEventListener('pointerleave', endGesture);
 
   /* 球面上滚轮缩放半径 */
   stageEl.addEventListener('wheel', (e) => {
@@ -809,6 +922,7 @@
     setSphereTransition(state.mode === 'globe');
     // 从球面切走时把 yaw 归零，避免网格里带着旋转
     if (state.mode !== 'globe') { globe.yaw = 0; globe.pitch = -0.18; }
+    if (state.mode === 'timeline') tl.offset = 0;
     layout(true);
   });
 
@@ -993,7 +1107,7 @@
 
   window.__App = {
     state, layout, openDetail, openMine, openPublish, openGate, closePanel, filtered, nodes,
-    globe, setSphereTransition, layoutGlobeOnly,
+    globe, tl, setSphereTransition, layoutGlobeOnly, layoutTimelineOnly,
     get settled() { return settled; }
   };
 })();
