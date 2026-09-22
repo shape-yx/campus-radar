@@ -67,7 +67,7 @@
   /* 横向/纵向平移（散落模式拖动视图用）。
      用 transform 平移整个画布，不重算布局 —— 所以拖动很轻，
      也不会像重排那样让卡片跳。范围按内容外接矩形夹住，避免拖到空无一物。 */
-  const pan = { x: 0, y: 0, dragging: false, minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  const pan = { x: 0, y: 0, dragging: false, minX: 0, maxX: 0, minY: 0, maxY: 0, inited: false };
 
   function applyPan() {
     canvasEl.style.setProperty('--pan-x', Math.round(pan.x) + 'px');
@@ -87,22 +87,30 @@
      所以取"内容外接矩形"和"画布实际尺寸"两者的较大值。 */
   function setPanBounds(placed) {
     const W = stageEl.clientWidth, H = stageEl.clientHeight;
-    let right = parseFloat(canvasEl.style.width) || canvasEl.clientWidth || 0;
-    let bottom = parseFloat(canvasEl.style.height) || canvasEl.clientHeight || 0;
+    /* 用"实际参与排布的卡片"算外接矩形（filtered 掉的卡片被挪到画布外，
+       若把全部节点算进来会得到一个荒唐的范围，纵向甚至算不出可用区间）。 */
+    let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
     placed.forEach((p) => {
       if (p.css3d) return;                       // 球面卡片自己管坐标，不参与平移
       const w = (p.forceW || p.n.tw) * (p.globeScale || p.n.ts || 1);
       const h = (p.forceH || p.n.th) * (p.globeScale || p.n.ts || 1);
+      left = Math.min(left, p.x);
       right = Math.max(right, p.x + w);
+      top = Math.min(top, p.y);
       bottom = Math.max(bottom, p.y + h);
     });
-    /* 横向：允许一直拖到"最右侧内容贴住视口左缘附近"为止，
-       这样右侧的卡片能拉到屏幕中间看全，而不是只能挪到一半。
-       纵向同理。留 40px 余量，避免最后一列紧贴边框。 */
+    if (!isFinite(left)) { left = 0; right = W; top = 0; bottom = H; }
+
+    /* 四向对称：往左拖到"内容右缘进入视口"，往右拖到"内容左缘进入视口"。
+       各留 24px 余量，避免边缘卡片紧贴边框。 */
     pan.minX = Math.min(0, W - right - 24);
-    pan.maxX = 0;
-    pan.minY = Math.min(0, H - bottom - 40);
-    pan.maxY = 0;
+    pan.maxX = Math.max(0, -left + 24);
+    pan.minY = Math.min(0, H - bottom - 24);
+    pan.maxY = Math.max(0, -top + 24);
+
+    /* 画布要覆盖整个内容范围（含负坐标），否则溢出部分会被裁掉、拖也拖不出来 */
+    canvasEl.style.width = Math.max(W, right - Math.min(0, left) + 24) + 'px';
+    canvasEl.style.height = Math.max(H, bottom - Math.min(0, top) + 24) + 'px';
     panOnly();
   }
 
@@ -299,41 +307,43 @@
     const pad = 16, gapX = 16, gapY = 16;
     const usableW = W - pad * 2, usableH = H - pad * 2;
 
-    /* 散落是"铺开的一张桌面"，不是"塞进一屏"：
-       目标总宽取约 1.7 个视口宽，超出部分靠拖动视图查看。
-       以前是无限缩小去适配视口，结果卡片又小又没得拖。 */
+    /* 散落是"向四面八方铺开的一张桌面"，不是"塞进一屏"：
+       目标尺寸取约 2.4 个视口宽 × 2.0 个视口高，四周都溢出，
+       所以四个方向都能拖动查看，而不会只有一个方向有内容。
+       以前纵向被压缩到视口内（cellH = usableH / rows），
+       结果上下两个方向基本没有卡片。 */
     const maxNeedW = Math.max.apply(null, list.map((it) => nodes.get(it.id).tw));
     const maxNeedH = Math.max.apply(null, list.map((it) => nodes.get(it.id).th));
 
-    const TARGET_W = Math.round(usableW * 1.7);
-    const idealTotalW = list.length * (maxNeedW + gapX * 2);
-    const totalWTarget = Math.max(TARGET_W, Math.min(idealTotalW, TARGET_W * 1.35));
+    const iw = maxNeedW + gapX * 2, ih = maxNeedH + gapY * 2;
+    let cols = Math.max(2, Math.round(Math.sqrt(list.length * (usableW * 2.4) / (usableH * 2.0))));
+    let rows = Math.max(2, Math.ceil(list.length / cols));
+    if (cols * rows < list.length) cols = Math.ceil(list.length / rows);
+    if (list.length <= 4) { cols = list.length; rows = 1; }
 
-    // 列数：在目标宽度里均分，并让纵向也别太挤
-    let cols = Math.max(2, Math.round(totalWTarget / (maxNeedW + gapX * 2)));
-    let rows = Math.max(1, Math.ceil(list.length / cols));
-    if (rows > 4) {                       // 行数过多就加列
-      rows = 4;
-      cols = Math.ceil(list.length / rows);
-    }
-    if (list.length <= 4) { rows = 1; cols = list.length; }
-
-    let cellW = totalWTarget / cols;
-    let cellH = Math.min(maxNeedH + gapY * 2, usableH / rows);
-    let shrink = Math.min(1, cellW / (maxNeedW + 8), cellH / (maxNeedH + 8));
+    /* 格子按内容尺寸（接近卡片理想尺寸），并等比缩到目标范围附近。
+       注意：格子尺寸与卡片尺寸是两件事 —— 格子负责间距，卡片由 shrink 缩放。 */
+    let cellW = Math.max(iw, (usableW * 2.4) / cols);
+    let cellH = Math.max(ih, (usableH * 2.0) / rows);
+    const totalW = cols * cellW, totalH = rows * cellH;
+    const allowW = usableW * 2.8, allowH = usableH * 2.4;
+    let shrink = Math.min(1, Math.min(allowW / totalW, allowH / totalH));
     shrink = Math.max(0.55, shrink);
-    cellW *= 1; cellH *= 1;
 
     let chosen = { cols, rows, cellW, cellH, shrink };
 
     /* 上面的 cols/rows/cellW/cellH/shrink 都已经是当前作用域的 let，
        这里不再重复声明（重名会直接让整个脚本语法报错）。 */
 
-    // 槽位：按到画布中心的距离排序，最急的落在正中
+    /* 槽位以内容正中为原点向四周铺开（负坐标是允许的 —— 拖动才看得到），
+       最急的落在正中，其余按到中心的距离向外排。 */
+    const gridW = cols * cellW, gridH = rows * cellH;
+    const originX = W / 2 - gridW / 2;
+    const originY = H / 2 - gridH / 2;
     const slots = [];
     for (let r = 0; r < rows; r += 1) {
       for (let c = 0; c < cols; c += 1) {
-        const x = pad + c * cellW, y = pad + r * cellH;
+        const x = originX + c * cellW, y = originY + r * cellH;
         const dx = (x + cellW / 2) - W / 2, dy = (y + cellH / 2) - H / 2;
         slots.push({ c, r, x, y, d: Math.sqrt(dx * dx + dy * dy) });
       }
@@ -632,8 +642,17 @@
        注意顺序：必须先 drawRules()（时间轴在这里给画布设宽度），
        再算平移范围 —— 反过来会读到旧宽度，导致右侧一截卡片永远拖不到。 */
     drawRules();
-    if (state.mode === 'scatter' || state.mode === 'timeline') setPanBounds(placed);
-    else { pan.x = 0; pan.y = 0; applyPan(); }
+    if (state.mode === 'scatter' || state.mode === 'timeline') {
+      setPanBounds(placed);
+      /* 切到该模式时把视图摆在内容中心 —— 这样上下左右都有卡片可拖。
+         记住 pan.inited，用户拖过后不再覆盖他的位置。 */
+      if (!pan.inited) {
+        pan.x = Math.round((pan.minX + pan.maxX) / 2);
+        pan.y = Math.round((pan.minY + pan.maxY) / 2);
+        pan.inited = true;
+        panOnly();
+      }
+    } else { pan.x = 0; pan.y = 0; pan.inited = false; applyPan(); }
 
     const independent = allItems().filter((it) => it.role !== 'update').length;
     countEl.innerHTML = '<b>' + idx(rows.length) + '</b> / ' + idx(independent) + ' 条';
@@ -1330,6 +1349,7 @@
     // 从球面切走时把 yaw 归零，避免网格里带着旋转
     if (state.mode !== 'globe') { globe.yaw = 0; globe.pitch = globe.homePitch; }
     if (state.mode === 'timeline') tl.offset = 0;
+    pan.inited = false;          // 每次切模式重新把视图摆到内容中心
     layout(true);
   });
 
@@ -1641,7 +1661,9 @@
     globe, tl, zoom, pan, panOnly, setSphereTransition, startSnap,
     getGesture: () => gesture,
     startSpin: () => { globe.autoSpin = true; if (Math.abs(globe.vYaw) < 0.0003) globe.vYaw = 0.00021; },
-    getPan: () => ({ x: Math.round(pan.x), y: Math.round(pan.y), minX: Math.round(pan.minX), maxX: Math.round(pan.maxX) }), layoutGlobeOnly, layoutTimelineOnly,
+    getPan: () => ({ x: Math.round(pan.x), y: Math.round(pan.y),
+      minX: Math.round(pan.minX), maxX: Math.round(pan.maxX),
+      minY: Math.round(pan.minY), maxY: Math.round(pan.maxY) }), layoutGlobeOnly, layoutTimelineOnly,
     get settled() { return settled; }
   };
 })();

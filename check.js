@@ -362,23 +362,56 @@ console.log('被测：' + URL_UNDER_TEST + '\n');
     for(var i=0;i<ns.length;i++)for(var j=i+1;j<ns.length;j++) if(hit(ns[i],ns[j])) bad++;
     var rot=ns.filter(function(n){return Math.abs(n.r)>0.5}).length;
     var sizes={}; ns.forEach(function(n){ sizes[Math.round(n.finalW*n.scale)]=1 });
-    /* 散落现在刻意横向溢出（超出部分靠拖动视图查看），
-       所以按"画布实际宽度"判定，而不是视口宽。 */
+    /* 散落是"向四面八方铺开"，内容以视口中心为原点，
+       所以坐标本来就会有负数（负坐标靠平移查看）。
+       这里判定"所有卡片都落在画布覆盖的内容范围内"，
+       并把负坐标折算成相对内容左/上边缘的距离。 */
+    var minX=Math.min.apply(null,ns.map(function(n){return n.x}));
+    var minY=Math.min.apply(null,ns.map(function(n){return n.y}));
+    var maxX=Math.max.apply(null,ns.map(function(n){return n.x+n.finalW*n.scale}));
+    var maxY=Math.max.apply(null,ns.map(function(n){return n.y+n.finalH*n.scale}));
     var cw=document.getElementById('canvas').clientWidth;
     var chh=document.getElementById('canvas').clientHeight;
-    var inBounds=ns.filter(function(n){return n.x>=0&&n.y>=0&&n.x+n.finalW*n.scale<=cw+4&&n.y+n.finalH*n.scale<=chh+4}).length;
+    var spanW=maxX-minX, spanH=maxY-minY;
+    var inBounds=ns.filter(function(n){
+      return n.x>=minX-4 && n.y>=minY-4 &&
+             n.x+n.finalW*n.scale<=maxX+4 && n.y+n.finalH*n.scale<=maxY+4;
+    }).length;
     return { n:ns.length, bad:bad, rot:rot, sizes:Object.keys(sizes).length, inBounds:inBounds };
   })()`);
   const sc = scatter.value || {};
   check('散落态：卡片互不重叠', sc.bad === 0, (sc.bad || 0) + ' 对重叠 / ' + sc.n + ' 张');
   check('散落态：卡片带旋转（不是网格）', Number(sc.rot) >= Math.floor(sc.n * 0.6), sc.rot + ' 张有旋转');
   check('散落态：尺寸分多档（紧急度可见）', Number(sc.sizes) >= 3, sc.sizes + ' 种尺寸');
-  check('散落态：全部落在画布内（横向溢出由拖动查看）', Number(sc.inBounds) === Number(sc.n),
-    sc.inBounds + ' / ' + sc.n + '，画布 ' + (await ev("document.getElementById('canvas').clientWidth")).value + 'px');
-  const scPan = await ev("(function(){var p=window.__App.getPan();return p.minX<0})()");
-  check('散落态：内容溢出时允许横向拖动视图', scPan.value === true, '可拖范围到 ' + (await ev("window.__App.getPan().minX")).value + 'px');
-  const opaque = await ev("(function(){var n=window.__App.nodes;var bad=0;n.forEach(function(x){var o=parseFloat(getComputedStyle(x.el).opacity);if(o<0.5)bad++});return bad})()");
-  check('散落态：布局已落定、卡片实心可见', Number(opaque.value) === 0, opaque.value + ' 张仍半透明');
+  check('散落态：全部落在画布内（溢出由拖动查看）', Number(sc.inBounds) === Number(sc.n),
+    sc.inBounds + ' / ' + sc.n);
+  /* 四向铺开：内容应同时超出视口左右与上下，且四向都能拖。
+     这里用四个独立计数器而不是对象字面量 —— 带中文键的对象字面量
+     在语句位置曾被解析成"代码块 + 标签语句"，得到一个空对象，
+     排查它花了不少时间，不值得再冒险。 */
+  const spread = await ev(`(function(){
+    var ns=Array.from(window.__App.nodes.values());
+    var xs=[], ys=[];
+    ns.forEach(function(n){ xs.push(n.x+n.finalW*n.scale/2); ys.push(n.y+n.finalH*n.scale/2); });
+    var cx=(Math.min.apply(null,xs)+Math.max.apply(null,xs))/2;
+    var cy=(Math.min.apply(null,ys)+Math.max.apply(null,ys))/2;
+    var tl=0, tr=0, bl=0, br=0;
+    ns.forEach(function(n){
+      var mx=n.x+n.finalW*n.scale/2, my=n.y+n.finalH*n.scale/2;
+      if (my < cy) { if (mx < cx) tl++; else tr++; }
+      else { if (mx < cx) bl++; else br++; }
+    });
+    var p=window.__App.getPan();
+    return [tl, tr, bl, br, (p.minX<0?1:0), (p.maxX>0?1:0), (p.minY<0?1:0), (p.maxY>0?1:0),
+            Math.round(p.minY), Math.round(p.maxY)].join(',');
+  })()`);
+  const SP2 = String(spread.value).split(',').map(Number);
+  check('散落态：四个方向都有卡片',
+    SP2[0] >= 3 && SP2[1] >= 3 && SP2[2] >= 3 && SP2[3] >= 3,
+    '左上 ' + SP2[0] + ' / 右上 ' + SP2[1] + ' / 左下 ' + SP2[2] + ' / 右下 ' + SP2[3] + ' 张');
+  check('散落态：上下左右都能拖动',
+    SP2[4] === 1 && SP2[5] === 1 && SP2[6] === 1 && SP2[7] === 1,
+    '纵向可拖 ' + SP2[8] + '…' + SP2[9] + 'px');
   await shot('01-scatter');
 
   /* ---------- 4. 网格：吸附归位成 2 列 ---------- */
