@@ -263,6 +263,28 @@ async function main() {
   check('详情有三个标签页', Number(panelTabs.value) === 3, panelTabs.value + ' 个');
   check('画布仍在（详情没有跳页）', Number((await ev("document.querySelectorAll('.card').length")).value) >= 20,
     (await ev("document.querySelectorAll('.card').length")).value + ' 张卡片仍在 DOM');
+
+  /* 层级回归断言：卡片必须整体低于侧栏。
+     球面曾用 1000+z 给卡片排序，前排卡片到 1400，直接把侧栏盖住了。 */
+  const zcards = await ev("(function(){var z=[];window.__App.nodes.forEach(function(n){z.push(parseInt(getComputedStyle(n.el).zIndex)||0)});return Math.max.apply(null,z)})()");
+  const zpanel = await ev("parseInt(getComputedStyle(document.getElementById('panel')).zIndex)");
+  check('卡片层级低于侧栏（不会被盖住）', Number(zcards.value) < Number(zpanel.value),
+    '卡片最高 ' + zcards.value + ' < 侧栏 ' + zpanel.value);
+
+  const occl = await ev(`(function(){
+    var p=document.getElementById('panel').getBoundingClientRect();
+    var bad=0, ok=0;
+    for(var y=Math.round(p.top)+70; y<p.bottom-40; y+=90){
+      for(var x=Math.round(p.left)+40; x<p.right-40; x+=110){
+        var e=document.elementFromPoint(x,y), n=e, path=[];
+        while(n && n!==document.body){ path.push(String(n.className||n.tagName)); n=n.parentElement }
+        if(path.some(function(c){return c.indexOf('card')===0})) bad++; else ok++;
+      }
+    }
+    return { bad:bad, ok:ok };
+  })()`);
+  check('侧栏内容没有被任何卡片遮挡', Number((occl.value || {}).bad) === 0,
+    '采样 ' + (occl.value || {}).ok + ' 点，被遮 ' + (occl.value || {}).bad + ' 点');
   await shot('04-detail');
   await ev("(function(){document.querySelector('[data-act=close]').click();return 'ok';})()");
   await sleep(600);

@@ -27,6 +27,15 @@
   const modesEl = document.getElementById('modes');
   const toastEl = document.getElementById('toast');
 
+  /* 层级约定（必须守住，否则卡片会盖住侧栏）：
+       卡片       10 … 410（按纵深排序，相对顺序不能变）
+       卡片悬停   500
+       遮罩      1000
+       侧栏      1001
+       吐司      2000
+     原先球面用 1000+z 给卡片排序，前排卡片能到 1400，直接盖住了 z-index 1001 的侧栏。 */
+  const Z_CARD_MIN = 10, Z_CARD_SPAN = 400;
+
   const REF = '2026-09-19 14:00';
   const esc = (v) => String(v === null || v === undefined ? '' : v).replace(
     /[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -310,7 +319,7 @@
         scaleOverride: null,
         globeScale: sc,
         globeOpacity: op2,
-        zIndex: Math.round(1000 + z)
+        zIndex: Math.round(Z_CARD_MIN + Z_CARD_SPAN * depth)
       });
     });
     return out;
@@ -407,7 +416,8 @@
       el.style.setProperty('--s', sc);
       el.style.setProperty('--o', (p.globeOpacity === undefined ? n.to : p.globeOpacity));
       el.style.setProperty('--r', (p.r || 0).toFixed(2));
-      el.style.setProperty('--z', p.zIndex !== undefined ? p.zIndex : Math.round(1000 - p.y));
+      el.style.setProperty('--z', p.zIndex !== undefined ? p.zIndex
+        : Math.round(Z_CARD_MIN + Z_CARD_SPAN * (1 - Math.min(1, p.y / Math.max(1, stageEl.clientHeight)))));
       el.style.transformOrigin = 'top left';
       // 把最终几何写回对象：自查脚本与后续布局都要读它
       n.x = p.x; n.y = p.y; n.finalW = p.forceW || n.tw; n.finalH = p.forceH || n.th;

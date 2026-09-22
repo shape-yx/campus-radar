@@ -158,7 +158,7 @@ button { font: inherit; color: inherit; }
 /* 散落态：卡片更小、带旋转、按距离压暗 —— 模拟"浮在不同深度" */
 .canvas[data-mode="scatter"] .card { cursor: grab; }
 .canvas[data-mode="scatter"] .card:active { cursor: grabbing; }
-.card:hover { box-shadow: 0 0 0 2px var(--page), 0 0 0 4px var(--card); z-index: 900 !important; }
+.card:hover { box-shadow: 0 0 0 2px var(--page), 0 0 0 4px var(--card); z-index: 500 !important; }
 .card.is-dim { --o: 0.22; }
 .card.is-picked { box-shadow: 0 0 0 2px var(--accent); }
 
@@ -251,6 +251,7 @@ button { font: inherit; color: inherit; }
   backdrop-filter: blur(2px);
 }
 .panel {
+  /* 侧栏必须高于所有卡片：卡片层级被限制在 10…410，悬停 500 */
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 1001;
   width: min(560px, 92vw);
   background: var(--card); color: var(--ink);
