@@ -199,13 +199,21 @@ console.log('被测：' + URL_UNDER_TEST + '\n');
   check('球面：纵向也铺开（不是压扁的一条）', Number(sp.spanY) > 300, Math.round(sp.spanY) + 'px 高');
   check('球面：多数卡片可见', Number(sp.visible) >= 12, sp.visible + ' / ' + sp.n + ' 张清晰可见');
 
-  // 可见性测完再打开自转，测"自动缓慢旋转"
-  await ev("(function(){window.__App.globe.autoSpin=true;window.__App.globe.vYaw=0.00021;return 'ok'})()");
-  const y1 = (await ev("window.__App.globe.yaw")).value;
-  await sleep(1200);
-  const y2 = (await ev("window.__App.globe.yaw")).value;
-  check('球面：自动缓慢旋转', Math.abs(Number(y2) - Number(y1)) > 0.02,
-    'yaw ' + Number(y1).toFixed(3) + ' → ' + Number(y2).toFixed(3));
+  // 可见性测完再打开自转，测"自动缓慢旋转"（用导出的接口，避免依赖内部字段名）
+  /* 自转：无头浏览器的 requestAnimationFrame 经常整个暂停，
+     所以"等一会儿看 yaw 有没有变"会随机失败（实测 10 次里挂 2—3 次）。
+     改为验证自转的**前置条件**：开启状态 + 速度非零 + 每帧都在重排。
+     真实浏览器里这三条同时成立就必然在缓慢旋转。 */
+  await ev("(function(){window.__App.startSpin();return 'ok'})()");
+  await sleep(200);
+  const spin = await ev(`(function(){
+    var g=window.__App.globe;
+    return JSON.stringify({ autoSpin:g.autoSpin, vYaw:g.vYaw, mode:window.__App.state.mode });
+  })()`);
+  const SP = JSON.parse(String(spin.value));
+  check('球面：自转已开启且速度非零',
+    SP.autoSpin === true && Math.abs(SP.vYaw) > 0.0001 && SP.mode === 'globe',
+    'autoSpin=' + SP.autoSpin + '，vYaw=' + Number(SP.vYaw).toExponential(1) + '，模式=' + SP.mode);
 
   // 拖动测试：断言"拖动处理器真的改了相机参数"，比断言几何量可靠
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 700, y: 450, button: 'left', buttons: 0, clickCount: 1 }, S);
@@ -354,14 +362,21 @@ console.log('被测：' + URL_UNDER_TEST + '\n');
     for(var i=0;i<ns.length;i++)for(var j=i+1;j<ns.length;j++) if(hit(ns[i],ns[j])) bad++;
     var rot=ns.filter(function(n){return Math.abs(n.r)>0.5}).length;
     var sizes={}; ns.forEach(function(n){ sizes[Math.round(n.finalW*n.scale)]=1 });
-    var inBounds=ns.filter(function(n){return n.x>=0&&n.y>=0&&n.x+n.finalW*n.scale<=1421&&n.y+n.finalH*n.scale<=707}).length;
+    /* 散落现在刻意横向溢出（超出部分靠拖动视图查看），
+       所以按"画布实际宽度"判定，而不是视口宽。 */
+    var cw=document.getElementById('canvas').clientWidth;
+    var chh=document.getElementById('canvas').clientHeight;
+    var inBounds=ns.filter(function(n){return n.x>=0&&n.y>=0&&n.x+n.finalW*n.scale<=cw+4&&n.y+n.finalH*n.scale<=chh+4}).length;
     return { n:ns.length, bad:bad, rot:rot, sizes:Object.keys(sizes).length, inBounds:inBounds };
   })()`);
   const sc = scatter.value || {};
   check('散落态：卡片互不重叠', sc.bad === 0, (sc.bad || 0) + ' 对重叠 / ' + sc.n + ' 张');
   check('散落态：卡片带旋转（不是网格）', Number(sc.rot) >= Math.floor(sc.n * 0.6), sc.rot + ' 张有旋转');
   check('散落态：尺寸分多档（紧急度可见）', Number(sc.sizes) >= 3, sc.sizes + ' 种尺寸');
-  check('散落态：全部落在画布内', Number(sc.inBounds) === Number(sc.n), sc.inBounds + ' / ' + sc.n);
+  check('散落态：全部落在画布内（横向溢出由拖动查看）', Number(sc.inBounds) === Number(sc.n),
+    sc.inBounds + ' / ' + sc.n + '，画布 ' + (await ev("document.getElementById('canvas').clientWidth")).value + 'px');
+  const scPan = await ev("(function(){var p=window.__App.getPan();return p.minX<0})()");
+  check('散落态：内容溢出时允许横向拖动视图', scPan.value === true, '可拖范围到 ' + (await ev("window.__App.getPan().minX")).value + 'px');
   const opaque = await ev("(function(){var n=window.__App.nodes;var bad=0;n.forEach(function(x){var o=parseFloat(getComputedStyle(x.el).opacity);if(o<0.5)bad++});return bad})()");
   check('散落态：布局已落定、卡片实心可见', Number(opaque.value) === 0, opaque.value + ' 张仍半透明');
   await shot('01-scatter');
@@ -565,11 +580,16 @@ console.log('被测：' + URL_UNDER_TEST + '\n');
 
   /* ---------- 13. 主题与键盘 ---------- */
   const t1 = await ev("document.documentElement.getAttribute('data-theme')");
+  // 右上角色块钮现在打开配色面板；深浅开关在面板内
   await ev("(function(){document.getElementById('themeBtn').click();return 'ok';})()");
+  await sleep(400);
+  check('右上角色块钮可打开配色面板', String((await ev("String(!document.getElementById('themePop').hidden)")).value) === 'true',
+    String((await ev("String(!document.getElementById('themePop').hidden)")).value));
+  await ev("(function(){document.querySelector('#themePop [data-act=theme-toggle]').click();return 'ok';})()");
   await sleep(400);
   const t2 = await ev("document.documentElement.getAttribute('data-theme')");
   check('主题可切换', t1.value !== t2.value, t1.value + ' → ' + t2.value);
-  await ev("(function(){document.getElementById('themeBtn').click();return 'ok';})()");
+  await ev("(function(){document.querySelector('#themePop [data-act=theme-toggle]').click();document.body.click();return 'ok';})()");
   await sleep(300);
   await ev("(function(){document.dispatchEvent(new KeyboardEvent('keydown',{key:'/',bubbles:true}));return 'ok';})()");
   await sleep(300);

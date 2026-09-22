@@ -21,6 +21,8 @@
     actions: NS + ':actions',
     reports: NS + ':reports',
     theme: NS + ':theme',
+    accent: NS + ':accent',
+    dark: NS + ':dark',
     admin: NS + ':admin'
   };
 
@@ -96,6 +98,9 @@
       redFlags: (raw.redFlags || []).filter(Boolean),
       related: [], role: 'main', updatedAt: '由你发布',
       tags: (raw.tags || []).filter(Boolean),
+      /* 配图：只接受 dataURL（纯前端站点没有服务器可上传）。
+         体积由前端压缩控制在几十 KB，避免撑爆 localStorage 配额。 */
+      image: /^data:image\//i.test(String(raw.image || '')) ? String(raw.image) : '',
       contact: String(raw.contact || '').trim(),
       userPublished: true,
       createdAt: raw.createdAt || now.toISOString(),
@@ -230,6 +235,19 @@
     /* --- 主题 --- */
     readTheme() { try { return localStorage.getItem(K.theme) || 'auto'; } catch { return 'auto'; } },
     writeTheme(m) { try { localStorage.setItem(K.theme, m); } catch { /* 隐私模式下忽略 */ } },
+
+    /* --- 界面配色：主色（页面底色）+ 深浅 ---
+       主色存在本机，刷新后保留；深浅是独立的开关，
+       这样用户既能换色、也能单独切换明亮/深色。 */
+    readAccent() {
+      try {
+        const v = localStorage.getItem(K.accent);
+        return /^#[0-9a-f]{6}$/i.test(String(v)) ? String(v) : '';
+      } catch { return ''; }
+    },
+    writeAccent(hex) { try { localStorage.setItem(K.accent, String(hex)); } catch { /* 忽略 */ } },
+    readDark() { try { return localStorage.getItem(K.dark) === '1'; } catch { return false; } },
+    writeDark(on) { try { localStorage.setItem(K.dark, on ? '1' : '0'); } catch { /* 忽略 */ } },
 
     /* --- 维护 --- */
     exportAll() {

@@ -19,7 +19,7 @@
   --accent: #ff5a4d;
   --bar-h: 52px;
   --strip-h: 34px;
-  --foot-h: 108px;
+  --nav-h: 46px;
   --unit: 10px;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   --sans: "Helvetica Neue", Helvetica, Inter, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
@@ -58,7 +58,15 @@ button { font: inherit; color: inherit; }
 .bar__logo { height: 26px; width: auto; display: block; }
 .bar__name { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
 
-.bar__modes { display: flex; gap: 4px; margin-left: auto; }
+/* 底部导航条：原来在顶栏右侧，现在整条居左排在画布下方 */
+.nav {
+  height: var(--nav-h);
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 var(--unit);
+  overflow-x: auto; overflow-y: hidden;
+  white-space: nowrap; scrollbar-width: none;
+}
+.nav::-webkit-scrollbar { display: none; }
 .mode {
   appearance: none; border: none; background: transparent;
   display: inline-flex; align-items: baseline; gap: 6px;
@@ -114,10 +122,15 @@ button { font: inherit; color: inherit; }
 /* ========================== 画布 ========================== */
 .stage {
   position: relative;
-  height: calc(100vh - var(--bar-h) - var(--strip-h) - var(--foot-h));
+  height: calc(100vh - var(--bar-h) - var(--nav-h) - var(--strip-h));
   margin: 0 var(--unit);
   overflow: hidden;
 }
+/* 网格内容高于视口时开启纵向滚动（滚动条收窄一些，别抢视觉） */
+.stage.is-scrollable { overflow-y: auto; overscroll-behavior: contain; }
+.stage.is-scrollable::-webkit-scrollbar { width: 8px; }
+.stage.is-scrollable::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.28); border-radius: 999px; }
+.canvas { will-change: transform; }
 .stage:focus { outline: none; }
 .canvas { position: absolute; inset: 0; }
 
@@ -363,26 +376,11 @@ textarea { resize: vertical; min-height: 76px; }
 .empty { padding: 40px 16px; text-align: center; color: var(--dim); }
 .empty strong { display: block; color: var(--ink); font-size: 15px; margin-bottom: 6px; font-weight: 500; }
 
-/* ========================== 页脚大字 ========================== */
-.foot { height: var(--foot-h); display: flex; flex-direction: column; justify-content: flex-end; }
-.foot__giant {
-  display: flex; justify-content: space-between; align-items: baseline;
-  padding: 0 var(--unit);
-  font-size: clamp(2.6rem, 11vw, 7.5rem);
-  line-height: 0.8; letter-spacing: -0.05em;
-  color: rgba(0,0,0,0.26);
-  user-select: none; pointer-events: none;
-}
-.foot__meta {
-  display: flex; gap: 14px; flex-wrap: wrap; justify-content: space-between;
-  padding: 8px var(--unit) 10px;
-  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.07em;
-  color: rgba(0,0,0,0.55);
-}
+/* 页脚大字与底部文字已按要求全部移除，底部只留导航条与筛选条。 */
 
 /* ========================== 吐司 ========================== */
 .toast {
-  position: fixed; left: 50%; bottom: calc(var(--foot-h) + 8px); transform: translate(-50%, 10px);
+  position: fixed; left: 50%; bottom: calc(var(--strip-h) + var(--nav-h) + 8px); transform: translate(-50%, 10px);
   z-index: 2000;
   padding: 10px 16px; border-radius: 999px;
   background: var(--ink); color: var(--card);
@@ -394,14 +392,14 @@ textarea { resize: vertical; min-height: 76px; }
 
 /* ========================== 响应式 ========================== */
 @media (max-width: 720px) {
-  :root { --bar-h: 46px; --foot-h: 84px; }
+  :root { --bar-h: 46px; --nav-h: 40px; --strip-h: 30px; }
   .bar { gap: 10px; }
   .bar__name { display: none; }
   .mode { padding: 6px 11px; font-size: 10px; }
   .bar__count { display: none; }
+  .bar__right { margin-left: auto; }
   .stage { margin: 0 6px; }
   .panel { width: 100vw; }
-  .foot__meta span:nth-child(2) { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -411,6 +409,8 @@ textarea { resize: vertical; min-height: 76px; }
 
 /* ========================== 球面模式 ========================== */
 /* 球面上卡片贴着"看不见的球"：近大远小、越靠边越倾斜、远处压暗 */
+.canvas[data-mode="scatter"] { cursor: grab; }
+.canvas[data-mode="scatter"]:active { cursor: grabbing; }
 .canvas[data-mode="globe"] { cursor: grab; }
 .canvas[data-mode="globe"]:active { cursor: grabbing; }
 .canvas[data-mode="globe"] .card { cursor: pointer; }
@@ -421,8 +421,13 @@ textarea { resize: vertical; min-height: 76px; }
 .canvas[data-mode="globe"] .card__foot .pill { font-size: 8px; padding: 1px 6px; }
 .canvas[data-mode="globe"] .card:hover { box-shadow: 0 0 0 1px var(--page), 0 0 0 3px var(--ink); }
 
-/* 球面模式下顶栏的提示 */
-.canvas[data-mode="globe"] ~ .foot .foot__meta { opacity: 1; }
+/* 卡片位置与透明度全由 JS 每帧写 CSS 变量驱动。
+   只要保留 .card 上那条 opacity .5s 的过渡，过渡就会被每帧重启，
+   透明度永远停在起始值附近（实测整屏卡片卡在 0.008 —— 等于全都看不见）。
+   这个坑在球面和散落两个模式都踩过，所以直接全局关掉卡片过渡：
+   本项目的卡片本来就不靠 CSS 过渡做动画（布局切换是 JS 算好的）。 */
+.card, .card * { transition: none !important; }
+
 
 /* ========================== 移动端溢出防护 ==========================
    筛选条是可横向滚动的，但没被约束宽度，导致它把整个文档撑出横向滚动。
@@ -544,7 +549,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
    而 canvas 与 stage 同尺寸（都从 top/left 起算），所以原点取 50% 50% 正好对上：
    缩放时球体原地变大变小，不会往右下角漂。 */
 .canvas {
-  transform: scale(var(--zoom, 1));
+  transform: translate3d(var(--pan-x, 0px), var(--pan-y, 0px), 0) scale(var(--zoom, 1));
   /* 由球面布局写入球心的像素坐标（见 layoutGlobe），缩放严格绕球心 */
   transform-origin: var(--zoom-origin, 50% 50%);
 }
@@ -553,3 +558,113 @@ html, body { max-width: 100%; overflow-x: hidden; }
 @media (max-width: 900px) { .zoombar { display: none; } }
 /* 键盘可达性：拖不动的人也能用方向键调 */
 .zoombar__track:focus-visible { outline: 2px solid var(--card); outline-offset: 4px; border-radius: 6px; }
+
+/* ========================== 卡片配图 ==========================
+   有配图的条目（目前只有 Python 那张）在标题上方显示一张小图，
+   其余卡片仍用条目编号占位。图用 em 尺寸，所以会随卡片一起缩放。 */
+.card__media {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 给图区一个稳定的高度比例（卡片高度的 46%），
+     避免被标题/底部挤到只剩几十像素。 */
+  flex: 0 0 46%;
+  padding: 0.4em 0.6em 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.card__media img {
+  /* 用绝对定位铺满图区。
+     注意不要同时写 inset + max-width/max-height：两者一起会把宽高解析成 0
+     （实测卡片上根本画不出图，全页截图里一个图标像素都没有）。 */
+  position: absolute;
+  inset: 0.4em 0.6em 0;
+  width: 100%; height: 100%;
+  object-fit: contain;
+  display: block;
+  /* 深色卡面上的浅色图标：加一点亮度让它更清楚 */
+  filter: drop-shadow(0 0 0.06em rgba(255, 255, 255, 0.25));
+}
+/* 有配图时标题区收紧一点，避免把卡片撑高 */
+.card:has(.card__media) .card__body { padding-top: 0.3em; }
+
+/* ========================== 「我的」里的界面配色 ==========================
+   一排色块选主色 + 一个取色器自定义 + 一个深浅开关。
+   主色写在 :root 的 --page 上，所以换色会同时影响页面、球面和页脚大字。 */
+.theme-box {
+  border: 1px solid #2a2a2a; border-radius: 10px;
+  padding: 12px 12px 6px; margin: 4px 0 16px;
+  background: #0c0c0c;
+}
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.swatch {
+  appearance: none; width: 30px; height: 30px;
+  border-radius: 8px; border: 2px solid transparent;
+  background: var(--sw);
+  cursor: pointer; padding: 0;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+  transition: transform 0.14s ease, border-color 0.14s ease;
+}
+.swatch:hover { transform: scale(1.08); }
+/* 当前主色：描一圈亮边，一眼能看出选中的是哪个 */
+.swatch.is-on { border-color: #f2f0ea; }
+.theme-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid #1c1c1c;
+}
+.theme-pick {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; color: var(--dim);
+}
+.theme-pick input[type="color"] {
+  width: 34px; height: 26px; padding: 0;
+  border: 1px solid #2a2a2a; border-radius: 6px;
+  background: #0c0c0c; cursor: pointer;
+}
+.theme-box .field__hint { margin: 8px 0 10px; }
+
+/* ========================== 右上角配色弹出层 ==========================
+   顶栏右上角的色块圆钮点开后，在它下方弹出一块取色面板。 */
+.themepop { position: relative; display: flex; }
+.bar__icon--color { padding: 0; display: grid; place-items: center; }
+/* 圆钮里的小色块：直接显示当前主色，不用看文字就知道现在是什么色 */
+.bar__swatch {
+  width: 16px; height: 16px; border-radius: 5px;
+  background: var(--page);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+.themepop__box {
+  position: absolute; right: 0; top: calc(100% + 8px);
+  z-index: 1200;                 /* 高于卡片与缩放条，低于吐司 */
+  width: 268px;
+  padding: 12px 12px 10px;
+  border-radius: 10px;
+  background: #0c0c0c;
+  border: 1px solid #2a2a2a;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+.themepop__box h2 { margin: 0 0 10px; }
+.themepop__box .field__hint { margin: 8px 0 2px; }
+
+/* ========================== 发布页配图 ==========================
+   纯前端站点没有服务器可上传，图片压成 dataURL 存本机。
+   这里只管样式：预览框 + 选择/移除按钮 + 体积提示。 */
+.imgfield { margin: 14px 0 4px; }
+.imgfield__body { display: flex; gap: 12px; align-items: flex-start; margin-top: 6px; }
+.imgfield__preview {
+  width: 132px; height: 92px; flex: none;
+  border: 1px dashed #333; border-radius: 8px;
+  background: #0c0c0c; overflow: hidden;
+  display: grid; place-items: center;
+}
+.imgfield__preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.imgfield__empty { font-family: var(--mono); font-size: 10px; color: #6a6a6a; }
+.imgfield__acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 4px; }
+.imgfield__pick { cursor: pointer; }
+.imgfield__size { font-family: var(--mono); font-size: 10px; color: var(--dim); }
+.btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+/* 详情页顶部的配图 */
+.detail__hero { margin: 0 0 16px; border-radius: 10px; overflow: hidden; background: #0c0c0c; }
+.detail__hero img { width: 100%; max-height: 260px; object-fit: cover; display: block; }
