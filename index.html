@@ -3,59 +3,58 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>校园雷达 · 校园活动与机会索引</title>
-<meta name="description" content="把校园里来源不同、质量不一的 26 条活动与机会信息，整理成一份可扫读、可核对的索引：每条都标注材料原文给出的时间、地点、名额与报名截止，材料没写的一律显示「未注明」。">
+<title>校园雷达 · 机会画布</title>
+<meta name="description" content="26 条校园机会摊在一个画布上：先散开看见全貌与紧急度，再按排布方式吸附归位。每条都标注材料原文给出的时间、地点、名额与报名截止，材料没写的一律显示「未注明」。">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="assets/favicon.svg">
-<link rel="stylesheet" href="assets/editorial.css">
+<link rel="stylesheet" href="assets/canvas.css">
 </head>
 <body>
-<a class="skip-link" href="#/list">跳到主要内容</a>
 
-<header class="topbar">
-  <div class="topbar__inner">
-    <a class="brand" href="#/">
-      <img class="brand__logo" src="assets/img/zcst-logo.png"
-           srcset="assets/img/zcst-logo.png 1x, assets/img/zcst-logo@2x.png 2x"
-           width="109" height="36" alt="珠海科技学院">
-      <span class="brand__text">
-        <strong id="brandName">校园雷达</strong>
-        <small id="brandTagline">Campus Opportunity Index</small>
-      </span>
-    </a>
+<header class="bar">
+  <a class="bar__brand" href="#" data-act="reset">
+    <img class="bar__logo" src="assets/img/zcst-logo.png"
+         srcset="assets/img/zcst-logo.png 1x, assets/img/zcst-logo@2x.png 2x"
+         width="109" height="36" alt="珠海科技学院">
+    <span class="bar__name">校园雷达</span>
+  </a>
 
-    <nav class="nav" id="nav" aria-label="主导航">
-      <a href="#/" data-nav=""><i>1</i>今天</a>
-      <a href="#/list" data-nav="list"><i>2</i>索引</a>
-      <a href="#/calendar" data-nav="calendar"><i>3</i>时间轴</a>
-      <a href="#/publish" data-nav="publish" hidden><i>4</i>发布</a>
-      <a href="#/mine" data-nav="mine"><i>5</i>我的</a>
-    </nav>
+  <nav class="bar__modes" id="modes" aria-label="排布方式">
+    <button type="button" data-mode="scatter" class="mode is-on"><i>01</i>散落</button>
+    <button type="button" data-mode="grid" class="mode"><i>02</i>网格</button>
+    <button type="button" data-mode="timeline" class="mode"><i>03</i>时间轴</button>
+  </nav>
 
-    <span class="chip-now" id="chipNow"><b>今天</b></span>
-    <button id="themeBtn" class="icon-btn" type="button" title="切换主题（橄榄 / 深橄榄）" aria-label="切换主题">L</button>
+  <div class="bar__right">
+    <span class="bar__count" id="count">—</span>
+    <button class="bar__icon" id="themeBtn" type="button" title="切换主题（橄榄 / 深橄榄）">L</button>
   </div>
 </header>
 
-<main id="app" class="app" tabindex="-1"></main>
+<div class="strip" id="strip"></div>
 
-<footer class="footer">
-  <div class="footer__giant" aria-hidden="true"><span>校园</span><span>雷达</span></div>
-  <div class="footer__meta">
-    <span id="footerText">校园雷达</span>
-    <span>信息来自 2026-09-19 考核模拟材料 · 数据只存在本机</span>
+<main class="stage" id="stage" tabindex="-1">
+  <div class="canvas" id="canvas" aria-live="polite"></div>
+  <noscript><p class="empty">这个界面需要启用 JavaScript。</p></noscript>
+</main>
+
+<aside class="panel" id="panel" hidden aria-label="侧栏"></aside>
+<div class="scrim" id="scrim" hidden></div>
+
+<footer class="foot">
+  <div class="foot__giant" aria-hidden="true"><span>校园</span><span>雷达</span></div>
+  <div class="foot__meta">
+    <span id="footText">校园雷达</span>
+    <span id="footHint">点卡片看详情 · 切排布换视角</span>
     <span id="buildTag">构建 —</span>
   </div>
 </footer>
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-<!-- 加载顺序固定：数据 → 逻辑 → 存储 → 视图 → 壳层（最后自启动） -->
 <script src="assets/data.js"></script>
 <script src="assets/logic.js"></script>
 <script src="assets/store.js"></script>
-<script src="assets/views.js"></script>
-<script src="assets/screens.js"></script>
-<script src="assets/main.js"></script>
+<script src="assets/app.js"></script>
 </body>
 </html>

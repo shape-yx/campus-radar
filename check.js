@@ -1,14 +1,13 @@
 'use strict';
 
 /* ==========================================================================
-   校园雷达 · 编辑式版 自查脚本（无第三方依赖）
+   校园雷达 · 机会画布 自查脚本（无第三方依赖）
    --------------------------------------------------------------------------
-   用 Chrome DevTools Protocol 驱动无头 Chrome，检查两类东西：
-     1. 功能：六个屏幕能渲染、判定结论正确、权限门有效、数据能持久化
-     2. 版式：编号导航、巨型标题、细线分栏、等宽标签、单一强调色是否真的生效
-   用法：
-     python3 -m http.server 8801
-     node check.js http://127.0.0.1:8801/index.html ./shots
+   检查两类东西：
+     1. 画布机制：三种排布能切换、散落态不重叠、网格吸附成 2 列、
+        时间轴有刻度、详情从侧栏推入且画布状态不丢
+     2. 业务结论：状态判定、适配判定、变更合并、口令门、刷新后数据保留
+   用法：node check.js http://127.0.0.1:8801/index.html ./shots
    ========================================================================== */
 
 const { spawn } = require('node:child_process');
@@ -16,341 +15,320 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const CHROME_CANDIDATES = [
+const CHROME = [
   path.join(os.homedir(), 'Library/Caches/ms-playwright/chromium-1223/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium'
-];
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+].find((p) => fs.existsSync(p));
 
 const URL_UNDER_TEST = process.argv[2] || 'http://127.0.0.1:8801/index.html';
 const SHOT_DIR = process.argv[3] || './shots';
-/* 调试端口随机取：固定端口会被上一次异常退出留下的浏览器占住，
-   新的一次运行就会静默连上旧实例、跑的是旧代码 —— 这个坑真的踩过。 */
 const PORT = 9300 + Math.floor(Math.random() * 600);
+const SETTLE = 1500;   // 布局过渡 720ms，留足余量再断言
 
 const results = [];
-function check(name, ok, detail) {
+const check = (name, ok, detail) => {
   results.push({ name, ok: !!ok });
   console.log((ok ? '  ✅ ' : '  ❌ ') + name + (detail ? '  — ' + detail : ''));
-}
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function portInUse(port) {
-  try { await fetch('http://127.0.0.1:' + port + '/json/version'); return true; } catch { return false; }
-}
-
 async function main() {
-  if (await portInUse(PORT)) {
-    console.error('端口 ' + PORT + ' 已被占用（可能是上次运行残留的浏览器），请先关掉它。');
-    process.exit(3);
-  }
-  const chromePath = CHROME_CANDIDATES.find((p) => fs.existsSync(p));
-  if (!chromePath) { console.error('找不到 Chrome'); process.exit(2); }
-  console.log('浏览器：' + chromePath);
-  console.log('被测地址：' + URL_UNDER_TEST + '\n');
-
-  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'radar-v2-'));
-  const chrome = spawn(chromePath, [
-    '--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars',
-    '--remote-debugging-port=' + PORT, '--user-data-dir=' + profileDir,
-    '--window-size=1440,1000', 'about:blank'
-  ], { stdio: 'ignore' });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'radar-canvas-'));
+  const chrome = spawn(CHROME, ['--headless=new', '--no-sandbox', '--hide-scrollbars',
+    '--remote-debugging-port=' + PORT, '--user-data-dir=' + dir, '--window-size=1440,900', 'about:blank'], { stdio: 'ignore' });
 
   let wsUrl = null;
   for (let i = 0; i < 60 && !wsUrl; i += 1) {
     await sleep(250);
-    try {
-      const r = await fetch('http://127.0.0.1:' + PORT + '/json/version');
-      wsUrl = (await r.json()).webSocketDebuggerUrl;
-    } catch { /* 继续等 */ }
+    try { wsUrl = (await (await fetch('http://127.0.0.1:' + PORT + '/json/version')).json()).webSocketDebuggerUrl; } catch { /* 等 */ }
   }
   if (!wsUrl) { chrome.kill(); throw new Error('Chrome 调试端口没起来'); }
 
   const ws = new WebSocket(wsUrl);
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-
-  let msgId = 0;
-  const pending = new Map();
-  const pageErrors = [];
-  const consoleErrors = [];
+  let id = 0; const pend = new Map(); const errs = [];
 
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
-    if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); return; }
+    if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); return; }
     if (m.method === 'Runtime.exceptionThrown') {
       const d = m.params.exceptionDetails;
-      pageErrors.push(((d.exception && d.exception.description) || d.text).split('\n')[0]);
-    }
-    if (m.method === 'Runtime.consoleAPICalled' && m.params.type === 'error') {
-      consoleErrors.push(m.params.args.map((a) => a.value || a.description).join(' '));
+      errs.push(((d.exception && d.exception.description) || d.text).split('\n')[0]);
     }
   };
-
-  const send = (method, params, sessionId) => new Promise((resolve) => {
-    const id = ++msgId;
-    pending.set(id, resolve);
-    ws.send(JSON.stringify({ id, method, params: params || {}, sessionId }));
+  const send = (method, params, sessionId) => new Promise((r2) => {
+    const i = ++id; pend.set(i, r2);
+    ws.send(JSON.stringify({ id: i, method, params: params || {}, sessionId }));
   });
 
-  const target = await send('Target.createTarget', { url: 'about:blank' });
-  const attached = await send('Target.attachToTarget', { targetId: target.result.targetId, flatten: true });
-  const S = attached.result.sessionId;
-
+  const tr = await send('Target.createTarget', { url: 'about:blank' });
+  const at = await send('Target.attachToTarget', { targetId: tr.result.targetId, flatten: true });
+  const S = at.result.sessionId;
   await send('Runtime.enable', {}, S);
   await send('Page.enable', {}, S);
   await send('Network.enable', {}, S);
   await send('Network.setCacheDisabled', { cacheDisabled: true }, S);
-  await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, S);
+  await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, S);
 
-  const evaluate = async (expr) => {
-    const r = await send('Runtime.evaluate', {
-      expression: '(() => { return (' + expr + '); })()',
-      returnByValue: true, awaitPromise: true, userGesture: true
-    }, S);
-    if (r.result && r.result.exceptionDetails) {
-      return { error: r.result.exceptionDetails.text + ' ' + ((r.result.exceptionDetails.exception || {}).description || '') };
-    }
+  const ev = async (expr) => {
+    const r = await send('Runtime.evaluate', { expression: '(() => { return (' + expr + '); })()', returnByValue: true, awaitPromise: true }, S);
+    if (r.result && r.result.exceptionDetails) return { error: r.result.exceptionDetails.text };
     return { value: r.result && r.result.result ? r.result.result.value : undefined };
   };
-
-  const shot = async (name) => {
+  const shot = async (n) => {
     const r = await send('Page.captureScreenshot', { format: 'png' }, S);
     if (r.result && r.result.data) {
       fs.mkdirSync(SHOT_DIR, { recursive: true });
-      fs.writeFileSync(path.join(SHOT_DIR, name + '.png'), Buffer.from(r.result.data, 'base64'));
+      fs.writeFileSync(path.join(SHOT_DIR, n + '.png'), Buffer.from(r.result.data, 'base64'));
     }
   };
-
-  const go = async (hash) => {
-    await evaluate("(function(){location.hash = " + JSON.stringify(hash) + ";return 'ok';})()");
-    await sleep(430);
+  /* 等布局真正落定：轮询 __App.settled，而不是猜一个固定时间。
+     固定等待会拍到飞行途中的卡片 —— 断言算过、画面没到。 */
+  const waitSettled = async (timeout) => {
+    const t0 = Date.now();
+    const lim = timeout || 6000;
+    while (Date.now() - t0 < lim) {
+      const r = await ev("String(!!(window.__App && window.__App.settled))");
+      if (r.value === 'true') { await sleep(120); return true; }
+      await sleep(120);
+    }
+    return false;
+  };
+  const mode = async (m) => {
+    await ev("(function(){var b=document.querySelector('[data-mode=" + JSON.stringify(m) + "]');b.click();return 'ok';})()");
+    await waitSettled();
   };
 
+  console.log('被测：' + URL_UNDER_TEST + '\n');
   await send('Page.navigate', { url: URL_UNDER_TEST }, S);
   await sleep(1500);
-  await evaluate("(function(){App.Store.resetUserData();return 'ok';})()");
+  await waitSettled();
+  await ev("(function(){App.Store.resetUserData();return 'ok';})()");
   await send('Page.reload', {}, S);
-  await sleep(1500);
+  await sleep(1200);
+  await waitSettled();
 
-  /* ---------------- 1. 加载与无异常 ---------------- */
-  const appLen = await evaluate("document.getElementById('app').innerHTML.length");
-  check('页面能加载并渲染', Number(appLen.value) > 5000, appLen.value + ' 字符');
-  check('无未捕获 JS 异常', pageErrors.length === 0, pageErrors.join(' | ') || '0 条');
-  check('无 console.error', consoleErrors.length === 0, consoleErrors.join(' | ') || '0 条');
+  /* ---------- 1. 加载 ---------- */
+  check('画布能加载并渲染卡片', Number((await ev("document.querySelectorAll('.card').length")).value) >= 20,
+    (await ev("document.querySelectorAll('.card').length")).value + ' 张');
+  check('无未捕获 JS 异常', errs.length === 0, errs.join(' | ') || '0 条');
 
-  /* ---------------- 2. 版式：照视频还原的橄榄栅格是否真的生效 ----------------
-     参照值来自视频帧实测：页面底 #94a04b、卡片 #000、2 列、缝隙 11px、全直角 */
-  const navIdx = await evaluate("[].map.call(document.querySelectorAll('#nav a i'),function(e){return e.textContent}).join('')");
-  check('导航带方括号编号', navIdx.value === '12345', '编号 ' + navIdx.value);
+  /* ---------- 2. 配色与几何照参考视频 ---------- */
+  check('页面底色为橄榄 #94a04b', /rgb\(148, 160, 75\)/.test(String((await ev("getComputedStyle(document.body).backgroundColor")).value)),
+    String((await ev("getComputedStyle(document.body).backgroundColor")).value));
+  check('卡片底色为纯黑', /rgb\(0, 0, 0\)/.test(String((await ev("getComputedStyle(document.querySelector('.card')).backgroundColor")).value)),
+    String((await ev("getComputedStyle(document.querySelector('.card')).backgroundColor")).value));
+  check('卡片全直角', String((await ev("getComputedStyle(document.querySelector('.card')).borderRadius")).value) === '0px',
+    String((await ev("getComputedStyle(document.querySelector('.card')).borderRadius")).value));
+  check('胶囊为 999px 圆角', /999px/.test(String((await ev("getComputedStyle(document.querySelector('.pill')).borderRadius")).value)),
+    String((await ev("getComputedStyle(document.querySelector('.pill')).borderRadius")).value));
+  check('标签使用等宽字体', /mono|Menlo|Consolas/i.test(String((await ev("getComputedStyle(document.querySelector('.card__foot')).fontFamily")).value)),
+    String((await ev("getComputedStyle(document.querySelector('.card__foot')).fontFamily")).value).slice(0, 22));
 
-  const pageBg = await evaluate("getComputedStyle(document.body).backgroundColor");
-  check('页面底色为橄榄黄绿 #94a04b', /rgb\(148, 160, 75\)/.test(String(pageBg.value)), String(pageBg.value));
+  /* ---------- 3. 散落态：铺开且不重叠（用旋转后的 OBB 判断） ---------- */
+  const scatter = await ev(`(function(){
+    var ns=[]; window.__App.nodes.forEach(function(n){ ns.push(n) });
+    function corners(o){
+      var rad=(o.r||0)*Math.PI/180, c=Math.cos(rad), s=Math.sin(rad);
+      var w=o.finalW*o.scale, h=o.finalH*o.scale;
+      return [[0,0],[w,0],[w,h],[0,h]].map(function(p){ return [o.x+p[0]*c-p[1]*s, o.y+p[0]*s+p[1]*c] });
+    }
+    function axes(c){ return [[c[1][0]-c[0][0],c[1][1]-c[0][1]],[c[3][0]-c[0][0],c[3][1]-c[0][1]]]; }
+    function proj(c,a){ var v=c.map(function(p){return p[0]*a[0]+p[1]*a[1]}); return [Math.min.apply(null,v),Math.max.apply(null,v)]; }
+    function hit(a,b){
+      var ca=corners(a), cb=corners(b), ax=axes(ca).concat(axes(cb));
+      for(var i=0;i<ax.length;i++){ var pa=proj(ca,ax[i]), pb=proj(cb,ax[i]); if(pa[1]<pb[0]+1||pb[1]<pa[0]+1) return false; }
+      return true;
+    }
+    var bad=0;
+    for(var i=0;i<ns.length;i++)for(var j=i+1;j<ns.length;j++) if(hit(ns[i],ns[j])) bad++;
+    var rot=ns.filter(function(n){return Math.abs(n.r)>0.5}).length;
+    var sizes={}; ns.forEach(function(n){ sizes[Math.round(n.finalW*n.scale)]=1 });
+    var inBounds=ns.filter(function(n){return n.x>=0&&n.y>=0&&n.x+n.finalW*n.scale<=1421&&n.y+n.finalH*n.scale<=707}).length;
+    return { n:ns.length, bad:bad, rot:rot, sizes:Object.keys(sizes).length, inBounds:inBounds };
+  })()`);
+  const sc = scatter.value || {};
+  check('散落态：卡片互不重叠', sc.bad === 0, (sc.bad || 0) + ' 对重叠 / ' + sc.n + ' 张');
+  check('散落态：卡片带旋转（不是网格）', Number(sc.rot) >= Math.floor(sc.n * 0.6), sc.rot + ' 张有旋转');
+  check('散落态：尺寸分多档（紧急度可见）', Number(sc.sizes) >= 3, sc.sizes + ' 种尺寸');
+  check('散落态：全部落在画布内', Number(sc.inBounds) === Number(sc.n), sc.inBounds + ' / ' + sc.n);
+  const opaque = await ev("(function(){var n=window.__App.nodes;var bad=0;n.forEach(function(x){var o=parseFloat(getComputedStyle(x.el).opacity);if(o<0.5)bad++});return bad})()");
+  check('散落态：布局已落定、卡片实心可见', Number(opaque.value) === 0, opaque.value + ' 张仍半透明');
+  await shot('01-scatter');
 
-  const chip = await evaluate("(function(){var e=document.querySelector('.chip-now');return e?getComputedStyle(e).borderRadius+'|'+e.textContent.trim():'缺失'})()");
-  check('右上角区块胶囊（圆角 + 当前区块名）', /^999px\|/.test(String(chip.value)), String(chip.value));
+  /* ---------- 4. 网格：吸附归位成 2 列 ---------- */
+  await mode('grid');
+  const g = await ev(`(function(){
+    var ns=[]; window.__App.nodes.forEach(function(n){ ns.push(n) });
+    var lefts={}; ns.forEach(function(n){ lefts[Math.round(n.x)]=1 });
+    var rotZero=ns.filter(function(n){return Math.abs(n.r)<0.01}).length;
+    var ordered=ns.slice().sort(function(a,b){ return Math.abs(a.y-b.y)>4 ? a.y-b.y : a.x-b.x });
+    var seq=ordered.map(function(n){return Math.round(n.x)}).join(',');
+    return { cols:Object.keys(lefts).length, rotZero:rotZero, n:ns.length, seq:seq.slice(0,60) };
+  })()`);
+  const gv = g.value || {};
+  check('网格态：吸附成 2 列', Number(gv.cols) === 2, gv.cols + ' 列');
+  check('网格态：旋转全部归零', Number(gv.rotZero) === Number(gv.n), gv.rotZero + ' / ' + gv.n);
+  const alternating = (function () {
+    const seq = String(gv.seq).split(',').filter(Boolean).map(Number);
+    const uniq = Array.from(new Set(seq));
+    if (uniq.length !== 2) return false;
+    for (let i = 0; i < seq.length; i += 1) if (seq[i] !== uniq[i % 2]) return false;
+    return true;
+  })();
+  check('网格态：两列左右交替排列', alternating, String(gv.seq).slice(0, 30));
+  await shot('02-grid');
 
-  await go('#/list');
-  const cardBg = await evaluate("getComputedStyle(document.querySelector('.card')).backgroundColor");
-  check('卡片底色为纯黑 #000', /rgb\(0, 0, 0\)/.test(String(cardBg.value)), String(cardBg.value));
+  /* ---------- 5. 时间轴 ---------- */
+  await mode('timeline');
+  const t = await ev("document.querySelectorAll('.tl-tick').length");
+  const tlLabels = await ev("[].map.call(document.querySelectorAll('.tl-label b'),function(e){return e.textContent}).join(' | ')");
+  check('时间轴：有日期刻度', Number(t.value) >= 5, t.value + ' 条刻度');
+  check('时间轴：刻度带日期标签', String(tlLabels.value).length > 6, String(tlLabels.value).slice(0, 40));
+  await shot('03-timeline');
 
-  const gridGap = await evaluate("getComputedStyle(document.querySelector('.grid')).gap");
-  check('卡片之间留出橄榄缝隙（gap ≈ 11px）', String(gridGap.value) === '11px', String(gridGap.value));
+  /* ---------- 6. 详情侧栏 ---------- */
+  await mode('scatter');
+  await ev("(function(){document.querySelector('.card').click();return 'ok';})()");
+  await sleep(700);
+  const panelOpen = await ev("!document.getElementById('panel').hidden");
+  const panelTabs = await ev("document.querySelectorAll('.panel .tab').length");
+  check('详情从侧栏推入', panelOpen.value === true, 'open=' + panelOpen.value);
+  check('详情有三个标签页', Number(panelTabs.value) === 3, panelTabs.value + ' 个');
+  check('画布仍在（详情没有跳页）', Number((await ev("document.querySelectorAll('.card').length")).value) >= 20,
+    (await ev("document.querySelectorAll('.card').length")).value + ' 张卡片仍在 DOM');
+  await shot('04-detail');
+  await ev("(function(){document.querySelector('[data-act=close]').click();return 'ok';})()");
+  await sleep(600);
+  check('关闭详情后侧栏隐藏', (await ev("document.getElementById('panel').hidden")).value === true);
 
-  const twoCols = await evaluate("getComputedStyle(document.querySelector('.grid')).gridTemplateColumns.split(' ').length");
-  check('栅格为 2 列', Number(twoCols.value) === 2, twoCols.value + ' 列');
-
-  const radius = await evaluate("getComputedStyle(document.querySelector('.card')).borderRadius");
-  check('卡片为全直角（无圆角）', String(radius.value) === '0px', String(radius.value));
-
-  const metaBar = await evaluate("(function(){var e=document.querySelector('.card__meta');if(!e)return '缺失';var p=document.querySelector('.pill');return getComputedStyle(e).borderTopWidth+'|'+(p?getComputedStyle(p).borderRadius:'无胶囊')})()");
-  check('卡片底部元信息栏 + [分类] 胶囊', /1px\|999px/.test(String(metaBar.value)), String(metaBar.value));
-
-  const halo = await evaluate("(function(){var g=document.querySelector('.footer__giant');var s=getComputedStyle(g);return s.fontSize+'|'+s.color})()");
-  check('页脚一行巨大橄榄色大字', /px\|rgba?\(0, 0, 0/.test(String(halo.value)), String(halo.value).slice(0, 34));
-  await shot('01-list');
-
-  /* ---------------- 3. 六个屏幕都能渲染 ---------------- */
-  const screens = [
-    ['今天', '#/', '.card', 'home'],
-    ['索引', '#/list', '.grid .card', 'list'],
-    ['时间轴', '#/calendar', '.tl-item', 'calendar'],
-    ['发布（口令门）', '#/publish', '#adminForm', 'gate'],
-    ['我的', '#/mine', '.statbar', 'mine'],
-    ['详情', '#/item/01', '.detail-head h1', 'detail']
-  ];
-  for (const [label, hash, sel, name] of screens) {
-    await go(hash);
-    const n = await evaluate("document.querySelectorAll('" + sel + "').length");
-    check('屏幕「' + label + '」渲染正常', Number(n.value) > 0, sel + ' × ' + n.value);
-    await shot('02-' + name);
-  }
-
-  /* ---------------- 4. 数据与判定结论 ---------------- */
-  const total = await evaluate("App.Radar.all(App.Store.profile(), App.now.value()).length");
-  check('材料 26 条进入数据层（24 条独立）', Number(total.value) === 24, total.value + ' 条');
-
-  const downgraded = await evaluate("App.visible(App.Store.profile(), true).filter(function(i){return i.downgraded}).length");
-  check('低可信内容被识别并降权', Number(downgraded.value) === 2, downgraded.value + ' 条');
-
-  const st = await evaluate(`(function(){
-    var p=App.Store.profile(), n=App.now.value();
-    function g(id){var i=App.Radar.find(id,p,n);return i.status.key+'/'+i.status.label;}
-    return [g('04'), g('02'), g('19'),
-      App.Radar.find('13',p,n).fit.level,
-      App.Radar.find('01',p,n).eventWhere,
-      App.Radar.find('17',p,n).deadline.label];
+  /* ---------- 7. 业务结论 ---------- */
+  await ev("(function(){window.__REF=Radar.parse('2026-09-19 14:00',false);return 'ok';})()");
+  const st = await ev(`(function(){
+    var p=Store.profile(), n=window.__REF;
+    function g(id){var i=Radar.find(id,p,n);return i.status.key+'/'+i.status.label;}
+    return [g('04'), g('02'), g('19'), Radar.find('13',p,n).fit.level,
+      Radar.find('01',p,n).eventWhere, Radar.find('17',p,n).deadline.label,
+      Radar.all(p,n).filter(function(i){return i.role!=='update'}).length];
   })()`);
   const ST = st.value || [];
-  check('9-18 已开始的直播判为「已开始」而不是进行中', String(ST[0]).indexOf('已开始') >= 0, String(ST[0]));
+  check('9-18 已开始的直播判为「已开始」', String(ST[0]).indexOf('已开始') >= 0, String(ST[0]));
   check('今晚 19:00 的公开课判为「就是今天」', String(ST[1]).indexOf('就是今天') >= 0, String(ST[1]));
   check('报名已截止的路演判为「报名已截止」', String(ST[2]).indexOf('已截止') >= 0, String(ST[2]));
   check('大一新生看「限大二及以上」判为暂不符合', String(ST[3]) === 'blocked', String(ST[3]));
-  check('训练营取的是更新后的地点（实验楼 A402）', /A402/.test(String(ST[4])), String(ST[4]));
+  check('训练营取更新后的地点（实验楼 A402）', /A402/.test(String(ST[4])), String(ST[4]));
   check('资料合集识别出网盘 9-22 失效', String(ST[5]) === '3 天后截止', String(ST[5]));
+  check('26 条材料信息进入画布（24 条独立）', Number(ST[6]) === 24, ST[6] + ' 条');
 
-  /* ---------------- 5. 变更合并 ---------------- */
-  await go('#/item/01');
-  const steps = await evaluate("document.querySelectorAll('.tstep').length");
-  const verdict = await evaluate("(function(){var e=document.querySelector('.verdict');return e?e.textContent:'';})()");
-  check('训练营的两次通知被并成时间线', Number(steps.value) === 2, steps.value + ' 个节点');
-  check('给出「以最新一条为准」的结论', /9 月 21 日/.test(String(verdict.value)), String(verdict.value).slice(0, 24));
+  /* ---------- 8. 筛选与重置 ---------- */
+  await ev("(function(){document.querySelector('[data-toggle=window][data-val=week]').click();return 'ok';})()");
+  await waitSettled();
+  const weekCount = await ev("document.getElementById('count').textContent");
+  check('按「7 天内」筛选生效', /17|1[0-9]/.test(String(weekCount.value)), String(weekCount.value));
+  await ev("(function(){document.querySelector('[data-act=reset]').click();return 'ok';})()");
+  await waitSettled();
+  const resetCount = await ev("document.getElementById('count').textContent");
+  check('重置后恢复全部条目', String(resetCount.value).indexOf('24') >= 0, String(resetCount.value));
 
-  await go('#/item/09');
-  const redirect = await evaluate("(function(){var e=document.querySelector('.empty strong');return e?e.textContent:'';})()");
-  check('单独打开补充通知会引导回主条目', /补充通知/.test(String(redirect.value)), String(redirect.value).slice(0, 18));
-
-  /* ---------------- 6. 详情三个标签 ---------------- */
-  await go('#/item/14');
-  await evaluate("(function(){document.querySelector('[data-tab=raw]').click();return 'ok';})()");
-  await sleep(400);
-  const rawText = await evaluate("(function(){var e=document.querySelector('.dl');return e?e.textContent:'';})()");
-  check('「原文信息」标签可切换并显示材料字段', /提交报名表/.test(String(rawText.value)),
-    String(rawText.value).replace(/\s+/g, ' ').slice(0, 30));
-
-  const emptyCells = await evaluate("document.querySelectorAll('.dl dd.empty').length");
-  check('材料未提供的字段显示「未注明」', Number(emptyCells.value) >= 1, emptyCells.value + ' 项');
-
-  /* ---------------- 7. 收藏 / 报名 + 刷新保留 ---------------- */
-  await go('#/item/06');
-  await evaluate("(function(){document.querySelector('[data-action=save]').click();return 'ok';})()"); await sleep(300);
-  await evaluate("(function(){document.querySelector('[data-action=join]').click();return 'ok';})()"); await sleep(300);
-  await send('Page.reload', {}, S); await sleep(1500);
-  const kept = await evaluate("JSON.stringify(App.Store.actions().saved)+'/'+JSON.stringify(App.Store.actions().joined)");
+  /* ---------- 9. 收藏 / 刷新保留 ---------- */
+  await ev("(function(){window.__App.openDetail('06');return 'ok';})()");
+  await sleep(600);
+  await ev("(function(){document.querySelector('[data-act=save]').click();return 'ok';})()");
+  await sleep(500);
+  await ev("(function(){document.querySelector('[data-act=join]').click();return 'ok';})()");
+  await sleep(500);
+  await send('Page.reload', {}, S);
+  await sleep(1200); await waitSettled();
+  const kept = await ev("JSON.stringify(Store.actions().saved)+'/'+JSON.stringify(Store.actions().joined)");
   check('刷新后收藏与报名标记保留', /"06"/.test(String(kept.value)), String(kept.value));
 
-  /* ---------------- 8. 发布权限门 ---------------- */
-  await go('#/');
-  const navHidden = await evaluate("(function(){var a=document.querySelector('#nav a[data-nav=publish]');return a?String(a.hidden):'missing';})()");
-  check('未解锁时导航不出现发布入口', navHidden.value === 'true', 'hidden=' + navHidden.value);
-
-  await go('#/publish');
-  const gateOnly = await evaluate("String(!!document.querySelector('#adminForm') && !document.querySelector('#publishForm'))");
-  check('直接访问 #/publish 只出现口令窗口', gateOnly.value === 'true', 'gate=' + gateOnly.value);
-
-  await evaluate("(function(){document.getElementById('adminPass').value='wrong-one';document.getElementById('adminForm').requestSubmit();return 'ok';})()");
-  await sleep(500);
-  const wrongMsg = await evaluate("(function(){var e=document.querySelector('.notice__title');return e?e.textContent:'';})()");
-  const stillGate = await evaluate("String(!!document.querySelector('#publishForm'))");
-  check('口令错误时提示且不放行', /口令不正确/.test(String(wrongMsg.value)) && stillGate.value === 'false',
-    '提示=' + String(wrongMsg.value).slice(0, 10) + ' 表单=' + stillGate.value);
-
-  await evaluate("(function(){document.getElementById('adminPass').value='radar2026';document.getElementById('adminForm').requestSubmit();return 'ok';})()");
+  /* ---------- 10. 发布权限门 ---------- */
+  await ev("(function(){window.__App.openPublish();return 'ok';})()");
   await sleep(600);
-  const unlocked = await evaluate("String(!!document.querySelector('#publishForm'))");
-  check('输入正确口令后进入发布表单', unlocked.value === 'true', 'form=' + unlocked.value);
-  await shot('03-publish');
+  const gateOnly = await ev("String(!!document.getElementById('gateForm') && !document.getElementById('publishForm'))");
+  check('未解锁时发布只出现口令窗', gateOnly.value === 'true', 'gate=' + gateOnly.value);
+  await ev("(function(){document.getElementById('gateForm').elements.pass.value='wrong';document.getElementById('gateForm').requestSubmit();return 'ok';})()");
+  await sleep(600);
+  const wrong = await ev("(function(){var e=document.querySelector('.panel__body p[style*=ff8a80]');return e?e.textContent.slice(0,10):''})()");
+  check('口令错误时提示且不放行', /口令不正确/.test(String(wrong.value)), String(wrong.value));
+  await ev("(function(){document.getElementById('gateForm').elements.pass.value='radar2026';document.getElementById('gateForm').requestSubmit();return 'ok';})()");
+  await sleep(700);
+  check('口令正确后进入发布表单', (await ev("String(!!document.getElementById('publishForm'))")).value === 'true');
+  await shot('05-publish');
 
-  /* ---------------- 9. 发布闭环 ---------------- */
-  await evaluate(`(function(){
+  /* ---------- 11. 发布 → 进画布 ---------- */
+  await ev(`(function(){
     var f=document.getElementById('publishForm');
-    f.elements.title.value='编辑式版测试：周三自习搭子';
+    f.elements.title.value='画布测试：周三自习搭子';
     f.elements.eventStart.value='2026-09-23T19:00';
     f.elements.eventWhere.value='图书馆四楼';
     f.elements.capacity.value='3 人';
     f.elements.applyHow.value='报名后拉群';
-    f.elements.contact.value='微信 v2test';
-    f.elements.title.dispatchEvent(new Event('input',{bubbles:true}));
+    f.elements.contact.value='微信 canvas';
+    f.requestSubmit();
     return 'ok';
   })()`);
-  await sleep(450);
-  const pct = await evaluate("[].filter.call(document.querySelectorAll('.slab .label'),function(e){return /\\d \\/ 6/.test(e.textContent)}).map(function(e){return e.textContent}).join('')");
-  check('发布自检面板随填写更新（6 / 6）', /6 \/ 6/.test(String(pct.value)), '自检 ' + String(pct.value));
+  await sleep(1600);
+  const inCanvas = await ev("Array.prototype.some.call(document.querySelectorAll('.card__title'),function(e){return e.textContent.indexOf('画布测试')>=0})");
+  check('发布的内容出现在画布上', inCanvas.value === true, String(inCanvas.value));
 
-  await evaluate("(function(){document.getElementById('publishForm').requestSubmit();return 'ok';})()");
-  await sleep(650);
-  const hash = await evaluate('location.hash');
-  check('发布后进入新内容详情页', /^#\/item\/u/.test(String(hash.value)), String(hash.value));
+  /* ---------- 12. 「我的」侧栏 ---------- */
+  await ev("(function(){window.__App.closePanel();window.__App.openMine();return 'ok';})()");
+  await sleep(700);
+  const mineSplit = await ev("document.querySelectorAll('.rowsplit > div').length");
+  const mineHeads = await ev("[].map.call(document.querySelectorAll('.panel h2'),function(e){return e.textContent}).join(' | ')");
+  const heads = String(mineHeads.value);
+  const fourHeads = /我收藏的/.test(heads) && /我标记报名的/.test(heads) && /我发布的内容/.test(heads) && /已忽略的/.test(heads);
+  const filled = await ev("[].filter.call(document.querySelectorAll('.panel h2'),function(h){var n=h.nextElementSibling;return n && (n.classList.contains('list-plain') || n.classList.contains('empty') || n.tagName==='P')}).length");
+  check('「我的」显示四类统计', Number(mineSplit.value) === 4, mineSplit.value + ' 项');
+  check('「我的」四组区块齐全且都有内容或空态说明', fourHeads && Number(filled.value) >= 4,
+    '四组标题=' + fourHeads + '，有内容的组=' + filled.value);
+  await shot('06-mine');
+  await ev("(function(){window.__App.closePanel();return 'ok';})()");
+  await sleep(400);
 
-  await go('#/list');
-  const inList = await evaluate("[].some.call(document.querySelectorAll('.card__meta .title'),function(a){return a.textContent.indexOf('编辑式版测试')>=0})");
-  check('自己发布的内容进入索引', inList.value === true, String(inList.value));
+  /* ---------- 13. 主题与键盘 ---------- */
+  const t1 = await ev("document.documentElement.getAttribute('data-theme')");
+  await ev("(function(){document.getElementById('themeBtn').click();return 'ok';})()");
+  await sleep(400);
+  const t2 = await ev("document.documentElement.getAttribute('data-theme')");
+  check('主题可切换', t1.value !== t2.value, t1.value + ' → ' + t2.value);
+  await ev("(function(){document.getElementById('themeBtn').click();return 'ok';})()");
+  await sleep(300);
+  await ev("(function(){document.dispatchEvent(new KeyboardEvent('keydown',{key:'/',bubbles:true}));return 'ok';})()");
+  await sleep(300);
+  check('按 / 聚焦搜索框', (await ev("document.activeElement?document.activeElement.id:''")).value === 'q',
+    '聚焦到 ' + (await ev("document.activeElement?document.activeElement.id:''")).value);
 
-  await go('#/calendar');
-  const inCal = await evaluate("[].some.call(document.querySelectorAll('.tl-item__title'),function(a){return a.textContent.indexOf('编辑式版测试')>=0})");
-  check('自己发布的内容进入时间轴', inCal.value === true, String(inCal.value));
-
-  /* ---------------- 10. 四个入口展开 ---------------- */
-  await go('#/mine');
-  const tiles = await evaluate("document.querySelectorAll('.statbar a.stat').length");
-  check('「我的」有四个可点击入口', Number(tiles.value) === 4, tiles.value + ' 个');
-
-  for (const [k, label, n] of [['saved', '我收藏的', 1], ['joined', '我标记报名的', 1], ['mine', '我发布的', 1], ['hidden', '已忽略的', 0]]) {
-    await go('#/mine?sec=' + k);
-    const rows = await evaluate("document.querySelectorAll('.directory .dirrow').length");
-    const title = await evaluate("(function(){var hs=document.querySelectorAll('.blockhead h2');for(var i=0;i<hs.length;i++){var t=hs[i].textContent;if(t.indexOf('我收藏')===0||t.indexOf('我标记')===0||t.indexOf('我发布')===0||t.indexOf('已忽略')===0)return t}return ''})()");
-    if (n > 0) {
-      check('展开「' + label + '」能看到 ' + n + ' 条', Number(rows.value) === n && String(title.value).indexOf(label) >= 0,
-        rows.value + ' 条 · ' + String(title.value));
-    } else {
-      const msg = await evaluate("(function(){var e=document.querySelector('.empty p');return e?e.textContent:'';})()");
-      check('展开「' + label + '」为空时给出说明', String(msg.value).length > 8, String(msg.value).slice(0, 24));
-    }
-  }
-  await shot('04-mine');
-
-  /* ---------------- 11. 主题 / 快捷键 ---------------- */
-  await go('#/');
-  const t1 = await evaluate("document.documentElement.getAttribute('data-theme')");
-  await evaluate("(function(){document.getElementById('themeBtn').click();return 'ok';})()");
-  await sleep(320);
-  const t2 = await evaluate("document.documentElement.getAttribute('data-theme')");
-  const bg2 = await evaluate("getComputedStyle(document.body).backgroundColor");
-  check('主题可切换且底色随之变化', t1.value !== t2.value && /rgb\(58, 64, 32\)/.test(String(bg2.value)),
-    t1.value + ' → ' + t2.value + ' ' + bg2.value);
-  await evaluate("(function(){document.getElementById('themeBtn').click();return 'ok';})()");
-  await sleep(250);
-
-  await go('#/list');
-  const focusId = await evaluate("(function(){document.getElementById('q').blur();document.dispatchEvent(new KeyboardEvent('keydown',{key:'/',bubbles:true}));return document.activeElement?document.activeElement.id:'';})()");
-  check('按 / 键聚焦搜索框', focusId.value === 'q', '聚焦到 ' + focusId.value);
-
-  /* ---------------- 12. 移动端 ---------------- */
+  /* ---------- 14. 移动端 ---------- */
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true }, S);
-  for (const [label, hash] of [['今天', '#/'], ['索引', '#/list'], ['时间轴', '#/calendar'], ['详情', '#/item/01'], ['我的', '#/mine']]) {
-    await go(hash);
-    const ov = await evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth");
-    check('移动端「' + label + '」无横向溢出', Number(ov.value) <= 2, ov.value + 'px');
-  }
-  await shot('05-mobile');
+  await send('Page.reload', {}, S);
+  await sleep(1200); await waitSettled();
+  const mob = await ev(`(function(){
+    var ns=[]; window.__App.nodes.forEach(function(n){ ns.push(n) });
+    var tooWide = ns.filter(function(n){ return n.x + n.finalW*n.scale > document.getElementById('stage').clientWidth + 2 }).length;
+    return { n:ns.length, tooWide:tooWide, cols:(function(){var l={};ns.forEach(function(n){l[Math.round(n.x)]=1});return Object.keys(l).length})() };
+  })()`);
+  check('移动端散落不超出画布', Number((mob.value || {}).tooWide) === 0, (mob.value || {}).tooWide + ' 张越界');
+  check('移动端页面无横向滚动', Number((await ev("document.documentElement.scrollWidth - document.documentElement.clientWidth")).value) <= 2,
+    (await ev("document.documentElement.scrollWidth - document.documentElement.clientWidth")).value + 'px');
+  await shot('07-mobile');
 
-  /* ---------------- 汇总 ---------------- */
+  /* ---------- 汇总 ---------- */
   const failed = results.filter((r) => !r.ok);
-  console.log('\n' + '─'.repeat(54));
+  console.log('\n' + '─'.repeat(56));
   console.log('通过 ' + (results.length - failed.length) + ' / ' + results.length + ' 项');
   if (failed.length) console.log('未通过：' + failed.map((f) => f.name).join('；'));
   console.log('截图目录：' + path.resolve(SHOT_DIR));
-  if (pageErrors.length) console.log('页面异常：\n' + pageErrors.join('\n'));
+  if (errs.length) console.log('页面异常：\n' + errs.join('\n'));
 
-  ws.close();
-  chrome.kill();
-  try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  ws.close(); chrome.kill();
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 忽略 */ }
   process.exit(failed.length ? 1 : 0);
 }
 
-main().catch((err) => {
-  console.error('自查脚本出错：', err.message);
-  try {
-    require('node:child_process').execSync("pkill -f 'remote-debugging-port=" + PORT + "' || true", { stdio: 'ignore' });
-  } catch { /* 忽略 */ }
+main().catch((e) => {
+  console.error('自查脚本出错：', e.message);
+  try { require('node:child_process').execSync("pkill -f 'remote-debugging-port=" + PORT + "' || true", { stdio: 'ignore' }); } catch { /* 忽略 */ }
   process.exit(2);
 });
