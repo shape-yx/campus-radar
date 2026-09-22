@@ -539,7 +539,15 @@ html, body { max-width: 100%; overflow-x: hidden; }
 }
 
 /* 画布缩放：只缩放画布内容，不放缩尺寸基准 */
-.canvas { transform: scale(var(--zoom, 1)); transform-origin: top left; }
+/* 缩放中心固定在球体中心，而不是左上角。
+   layoutGlobe 里球心是 (stage 宽 / 2, stage 高 * 0.5)，
+   而 canvas 与 stage 同尺寸（都从 top/left 起算），所以原点取 50% 50% 正好对上：
+   缩放时球体原地变大变小，不会往右下角漂。 */
+.canvas {
+  transform: scale(var(--zoom, 1));
+  /* 由球面布局写入球心的像素坐标（见 layoutGlobe），缩放严格绕球心 */
+  transform-origin: var(--zoom-origin, 50% 50%);
+}
 
 /* 窄屏（手机/平板）隐藏缩放条：触摸屏上意义不大，还占地方 */
 @media (max-width: 900px) { .zoombar { display: none; } }

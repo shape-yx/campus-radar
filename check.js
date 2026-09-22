@@ -275,6 +275,36 @@ console.log('被测：' + URL_UNDER_TEST + '\n');
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: ZB.trackX, y: ZB.trackBottom - 6, button: 'left', buttons: 0, clickCount: 1 }, S);
   check('拖动滑轨可缩小画布', parseFloat(String(zlo.value)) < 70, String(zlo.value));
 
+  /* 缩放原点必须在球体中心：放一个探针在原点坐标上，
+     它在屏幕上的位置缩放前后应完全不动（容差 1px）。 */
+  await ev("(function(){document.querySelector('[data-zoom=reset]').click();return 'ok'})()");
+  await sleep(250);
+  const orgChk = await ev(`(function(){
+    var c=document.getElementById('canvas');
+    var o=getComputedStyle(c).transformOrigin.split(' ').map(parseFloat);
+    var rs=c.getBoundingClientRect(), z=window.__App.zoom.value;
+    var d=document.createElement('div');
+    d.id='__probe'; d.style.cssText='position:absolute;left:0;top:0;width:2px;height:2px;transform:translate3d('+o[0]+'px,'+o[1]+'px,0);transform-origin:top left';
+    c.appendChild(d);
+    var before=d.getBoundingClientRect();
+    var at1={x:before.left, y:before.top};
+    window.__App.zoom.apply(2);
+    var after=document.getElementById('__probe').getBoundingClientRect();
+    var at2={x:after.left, y:after.top};
+    window.__App.zoom.apply(1);
+    d.remove();
+    var drift=Math.round(Math.hypot(at2.x-at1.x, at2.y-at1.y));
+    // 原点也应落在球心：canvas 内坐标 ≈ (stage 宽/2, stage 高*0.5)
+    var stage=document.getElementById('stage');
+    var ex=Math.abs(o[0]-stage.clientWidth/2), ey=Math.abs(o[1]-stage.clientHeight*0.5);
+    return { origin:o[0]+','+o[1], drift:drift, offCenter:Math.round(Math.max(ex,ey)) };
+  })()`);
+  const OC = orgChk.value || {};
+  check('缩放原点是球体中心（不是左上角）', Number(OC.offCenter) <= 2,
+    '原点 ' + OC.origin + '，偏离球心 ' + OC.offCenter + 'px');
+  check('绕球心缩放：原点在屏幕上不漂移', Number(OC.drift) <= 1,
+    '1x→2x 漂移 ' + OC.drift + 'px');
+
   await ev("(function(){document.querySelector('[data-zoom=reset]').click();return 'ok'})()");
   await sleep(300);
   check('点比例框可复位到 100%', String((await ev("document.getElementById('zoomVal').textContent")).value) === '100%');

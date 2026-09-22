@@ -295,6 +295,17 @@
     });
   }
 
+  /* 缩放原点：写成"球心在 canvas 内的像素坐标"。
+     不写死 50% 50% 的原因：canvas 的高宽会随排布与筛选变化
+     （网格模式会把 canvas 撑高），用百分比就会和球心错开。
+     任何可能改变 canvas 尺寸的地方都要重新调一次。 */
+  function setZoomOrigin(cx, cy) {
+    canvasEl.style.setProperty('--zoom-origin', Math.round(cx) + 'px ' + Math.round(cy) + 'px');
+  }
+  function syncZoomOrigin() {
+    setZoomOrigin(stageEl.clientWidth / 2, stageEl.clientHeight * 0.5);
+  }
+
   /* ---------------- 布局：球面（照参考视频 3—5 秒） ----------------
      把每条信息放到球面的一组经纬点上：
        竖向分 5 条纬线（赤道上的卡片最大最亮，两极最小最暗，和视频一致）
@@ -305,6 +316,7 @@
     const W = stageEl.clientWidth, H = stageEl.clientHeight;
     const R = Math.min(globe.radius, Math.min(W, H) * (W < 620 ? 0.60 : 0.78));
     const cx = W / 2, cy = H * 0.5;
+    setZoomOrigin(cx, cy);
     const rows = 5;
     const per = Math.ceil(list.length / rows);
     /* 卡片尺寸上限：球面最靠前的卡片放大后也不能顶出画布。
@@ -509,6 +521,7 @@
     canvasEl.style.height = wrapH + 'px';
     if (state.mode === 'grid' && wrapH > stageEl.clientHeight) canvasEl.style.overflowY = 'auto';
     drawRules();
+    syncZoomOrigin();          // canvas 尺寸可能刚变，缩放原点要跟着球心走
 
     const independent = allItems().filter((it) => it.role !== 'update').length;
     countEl.innerHTML = '<b>' + idx(rows.length) + '</b> / ' + idx(independent) + ' 条';
@@ -1170,7 +1183,7 @@
     if (b) b.click();
   });
 
-  window.addEventListener('resize', () => layout(true));
+  window.addEventListener('resize', () => { layout(true); syncZoomOrigin(); });
 
   /* ---------------- 启动 ---------------- */
   (function boot() {
